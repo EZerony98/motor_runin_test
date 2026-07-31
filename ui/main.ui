@@ -1,0 +1,527 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1180</width>
+    <height>760</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>960</width>
+    <height>640</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>电机跑合测试系统</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">QMainWindow, QWidget {
+    background: #f4f6f8;
+    color: #1f2937;
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    font-size: 14px;
+}
+QFrame#testPanel, QFrame#logPanel {
+    background: white;
+    border: 1px solid #dce2e8;
+    border-radius: 8px;
+}
+QLabel#titleLabel {
+    color: #102a43;
+    font-size: 24px;
+    font-weight: 600;
+}
+QLabel#testTitle, QLabel#logTitle {
+    color: #334e68;
+    font-size: 16px;
+    font-weight: 600;
+}
+QLabel#plcConnectionLabel {
+    min-height: 30px;
+    padding: 0 14px;
+    border: 1px solid #cbd5e1;
+    border-radius: 15px;
+    background: #eef2f6;
+    color: #8a94a3;
+    font-weight: 600;
+}
+QLabel#plcAddressLabel {
+    color: #627d98;
+    font-size: 12px;
+}
+QPushButton {
+    min-height: 34px;
+    padding: 0 18px;
+    border: 1px solid #b9c4ce;
+    border-radius: 5px;
+    background: white;
+}
+QPushButton:hover {
+    background: #edf4fb;
+}
+QPushButton#submitButton {
+    color: white;
+    border-color: #1769aa;
+    background: #1769aa;
+    font-weight: 600;
+}
+QPushButton#submitButton:hover {
+    background: #12568c;
+}
+QLineEdit {
+    min-height: 36px;
+    padding: 0 10px;
+    border: 1px solid #b9c4ce;
+    border-radius: 5px;
+    background: white;
+    selection-background-color: #1769aa;
+}
+QLineEdit:focus {
+    border: 2px solid #1769aa;
+}
+QLineEdit#trayIdEdit {
+    background: #eef2f6;
+    color: #334e68;
+    font-weight: 600;
+}
+QPlainTextEdit {
+    border: 1px solid #dce2e8;
+    border-radius: 5px;
+    background: #fbfcfd;
+    font-family: Menlo, Consolas, monospace;
+    font-size: 12px;
+}</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="rootLayout">
+    <property name="spacing">
+     <number>16</number>
+    </property>
+    <property name="leftMargin">
+     <number>24</number>
+    </property>
+    <property name="topMargin">
+     <number>20</number>
+    </property>
+    <property name="rightMargin">
+     <number>24</number>
+    </property>
+    <property name="bottomMargin">
+     <number>20</number>
+    </property>
+    <item>
+     <layout class="QHBoxLayout" name="headerLayout">
+      <item>
+       <layout class="QVBoxLayout" name="titleLayout">
+        <property name="spacing">
+         <number>2</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="titleLabel">
+          <property name="text">
+           <string>电机跑合测试系统</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="subtitleLabel">
+          <property name="styleSheet">
+           <string notr="true">color: #627d98;</string>
+          </property>
+          <property name="text">
+           <string>Motor Run-in Test Station</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <spacer name="headerSpacer">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <layout class="QVBoxLayout" name="plcStatusLayout">
+        <property name="spacing">
+         <number>2</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="plcConnectionLabel">
+          <property name="text">
+           <string>● PLC 未连接</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="plcAddressLabel">
+          <property name="text">
+           <string>192.168.250.1:9600</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QFrame" name="testPanel">
+      <layout class="QVBoxLayout" name="testPanelLayout">
+       <property name="leftMargin">
+        <number>18</number>
+       </property>
+       <property name="topMargin">
+        <number>14</number>
+       </property>
+       <property name="rightMargin">
+        <number>18</number>
+       </property>
+       <property name="bottomMargin">
+        <number>16</number>
+       </property>
+       <item>
+        <layout class="QHBoxLayout" name="testHeadingLayout">
+         <item>
+          <widget class="QLabel" name="testTitle">
+           <property name="text">
+            <string>托盘上料与 SN 录入</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="testHeadingSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="testStateLabel">
+           <property name="styleSheet">
+            <string notr="true">color: #627d98;</string>
+           </property>
+           <property name="text">
+            <string>当前状态：等待托盘</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="trayInfoLayout">
+         <item>
+          <widget class="QLabel" name="trayIdLabel">
+           <property name="text">
+            <string>托盘编号</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="trayIdEdit">
+           <property name="minimumSize">
+            <size>
+             <width>210</width>
+             <height>0</height>
+            </size>
+           </property>
+           <property name="readOnly">
+            <bool>true</bool>
+           </property>
+           <property name="placeholderText">
+            <string>等待 PLC 读取 RFID</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="trayInfoSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="scanHintLabel">
+           <property name="styleSheet">
+            <string notr="true">color: #627d98;</string>
+           </property>
+           <property name="text">
+            <string>扫码后按回车自动进入下一位置</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QGridLayout" name="serialNumberGrid">
+         <property name="horizontalSpacing">
+          <number>14</number>
+         </property>
+         <property name="verticalSpacing">
+          <number>8</number>
+         </property>
+         <item row="0" column="0">
+          <widget class="QLabel" name="snLabel1">
+           <property name="text"><string>位置 1</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QLabel" name="snLabel2">
+           <property name="text"><string>位置 2</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="0" column="2">
+          <widget class="QLabel" name="snLabel3">
+           <property name="text"><string>位置 3</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="0" column="3">
+          <widget class="QLabel" name="snLabel4">
+           <property name="text"><string>位置 4</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="0" column="4">
+          <widget class="QLabel" name="snLabel5">
+           <property name="text"><string>位置 5</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLineEdit" name="snInput1">
+           <property name="maxLength"><number>64</number></property>
+           <property name="placeholderText"><string>扫描 SN 1</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QLineEdit" name="snInput2">
+           <property name="maxLength"><number>64</number></property>
+           <property name="placeholderText"><string>扫描 SN 2</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="1" column="2">
+          <widget class="QLineEdit" name="snInput3">
+           <property name="maxLength"><number>64</number></property>
+           <property name="placeholderText"><string>扫描 SN 3</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="1" column="3">
+          <widget class="QLineEdit" name="snInput4">
+           <property name="maxLength"><number>64</number></property>
+           <property name="placeholderText"><string>扫描 SN 4</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="1" column="4">
+          <widget class="QLineEdit" name="snInput5">
+           <property name="maxLength"><number>64</number></property>
+           <property name="placeholderText"><string>扫描 SN 5</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QLabel" name="snLabel6">
+           <property name="text"><string>位置 6</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QLabel" name="snLabel7">
+           <property name="text"><string>位置 7</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="2" column="2">
+          <widget class="QLabel" name="snLabel8">
+           <property name="text"><string>位置 8</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="2" column="3">
+          <widget class="QLabel" name="snLabel9">
+           <property name="text"><string>位置 9</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="2" column="4">
+          <widget class="QLabel" name="snLabel10">
+           <property name="text"><string>位置 10</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="3" column="0">
+          <widget class="QLineEdit" name="snInput6">
+           <property name="maxLength"><number>64</number></property>
+           <property name="placeholderText"><string>扫描 SN 6</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="3" column="1">
+          <widget class="QLineEdit" name="snInput7">
+           <property name="maxLength"><number>64</number></property>
+           <property name="placeholderText"><string>扫描 SN 7</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="3" column="2">
+          <widget class="QLineEdit" name="snInput8">
+           <property name="maxLength"><number>64</number></property>
+           <property name="placeholderText"><string>扫描 SN 8</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="3" column="3">
+          <widget class="QLineEdit" name="snInput9">
+           <property name="maxLength"><number>64</number></property>
+           <property name="placeholderText"><string>扫描 SN 9</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+         <item row="3" column="4">
+          <widget class="QLineEdit" name="snInput10">
+           <property name="maxLength"><number>64</number></property>
+           <property name="placeholderText"><string>扫描 SN 10</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+       <layout class="QHBoxLayout" name="controlLayout">
+         <item>
+          <widget class="QPushButton" name="fillButton">
+           <property name="text">
+            <string>顺序补齐</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="clearButton">
+           <property name="text">
+            <string>清空 SN</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="controlSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QPushButton" name="submitButton">
+           <property name="text">
+            <string>写入 PLC</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QFrame" name="logPanel">
+      <layout class="QVBoxLayout" name="logPanelLayout">
+       <property name="leftMargin">
+        <number>18</number>
+       </property>
+       <property name="topMargin">
+        <number>14</number>
+       </property>
+       <property name="rightMargin">
+        <number>18</number>
+       </property>
+       <property name="bottomMargin">
+        <number>16</number>
+       </property>
+       <item>
+        <widget class="QLabel" name="logTitle">
+         <property name="text">
+          <string>运行日志</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPlainTextEdit" name="logOutput">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>110</height>
+          </size>
+         </property>
+         <property name="readOnly">
+          <bool>true</bool>
+         </property>
+         <property name="placeholderText">
+          <string>系统日志将在这里显示……</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <tabstops>
+  <tabstop>snInput1</tabstop>
+  <tabstop>snInput2</tabstop>
+  <tabstop>snInput3</tabstop>
+  <tabstop>snInput4</tabstop>
+  <tabstop>snInput5</tabstop>
+  <tabstop>snInput6</tabstop>
+  <tabstop>snInput7</tabstop>
+  <tabstop>snInput8</tabstop>
+  <tabstop>snInput9</tabstop>
+  <tabstop>snInput10</tabstop>
+  <tabstop>fillButton</tabstop>
+  <tabstop>clearButton</tabstop>
+  <tabstop>submitButton</tabstop>
+ </tabstops>
+ <resources/>
+ <connections/>
+</ui>

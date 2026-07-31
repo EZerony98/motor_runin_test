@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "base_url": "",
+  "upload_path": "/api/test-records",
+  "timeout_seconds": 10,
+  "retry_count": 3,
+  "retry_interval_seconds": 5
+}

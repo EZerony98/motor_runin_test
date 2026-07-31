@@ -1,0 +1,16 @@
+{
+  "process_name": "默认跑合工艺",
+  "sample_interval_seconds": 1,
+  "stages": [
+    {
+      "name": "低速跑合",
+      "speed_rpm": 1000,
+      "duration_seconds": 60
+    },
+    {
+      "name": "高速跑合",
+      "speed_rpm": 2000,
+      "duration_seconds": 60
+    }
+  ]
+}

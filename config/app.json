@@ -1,0 +1,19 @@
+{
+  "application": {
+    "name": "Motor Run-in Test",
+    "window_title": "电机跑合测试系统",
+    "language": "zh_CN"
+  },
+  "logging": {
+    "level": "INFO",
+    "directory": "logs"
+  },
+  "data": {
+    "directory": "data"
+  },
+  "paths": {
+    "data": "data",
+    "logs": "logs",
+    "exports": "exports"
+  }
+}
