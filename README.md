@@ -34,6 +34,8 @@ ui/ui_main.py。ui_main.py 是生成文件，不应手工修改。
 
 1. PLC 读取 RFID 后调用 MainWindow.set_tray_id(tray_id) 显示托盘编号。
 2. 扫码器按键盘输入方式录入 SN，扫码结束发送回车即可自动跳到下一位置。
+   程序兼容 Return、Enter、CR、LF；若扫码枪结束符未被 Qt 识别，快速输入
+   停止 180 ms 后也会自动确认。相关参数在 config/app.json 的 scanner 中。
 3. 只扫描第一个 SN 时，可点击“顺序补齐”生成其余 9 个连续 SN。
 4. 点击“写入 PLC”后，主窗口发出 serial_numbers_ready(tray_id, serial_numbers)
    信号；后台 PLC 线程完成实际寄存器写入和回读校验。

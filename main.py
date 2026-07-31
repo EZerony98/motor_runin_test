@@ -4,9 +4,10 @@ import sys
 from datetime import datetime
 from functools import partial
 from pathlib import Path
+from time import monotonic
 from typing import List, Optional, Sequence
 
-from PySide6.QtCore import QMetaObject, QThread, Qt, Signal
+from PySide6.QtCore import QEvent, QMetaObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import QApplication, QLineEdit, QMainWindow, QMessageBox
 
 from models.tray_batch import TrayBatch
@@ -37,6 +38,26 @@ class MainWindow(QMainWindow):
             getattr(self.ui, f"snInput{position}")
             for position in range(1, SerialNumberService.MOTOR_COUNT + 1)
         ]
+        scanner_config = self.config["app"].get("scanner", {})
+        self.scanner_auto_finish_delay_ms = max(
+            50, int(scanner_config.get("auto_finish_delay_ms", 180))
+        )
+        self.scanner_max_input_duration_ms = max(
+            500, int(scanner_config.get("max_input_duration_ms", 2000))
+        )
+        self.scanner_min_length = max(
+            1, int(scanner_config.get("min_serial_length", 3))
+        )
+        self.scan_started_at: List[Optional[float]] = [
+            None for _ in self.serial_inputs
+        ]
+        self.scan_timers: List[QTimer] = []
+        for index, serial_input in enumerate(self.serial_inputs):
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(partial(self._finish_timed_scan, index))
+            self.scan_timers.append(timer)
+            serial_input.installEventFilter(self)
         self.setWindowTitle(
             self.config["app"]["application"].get("window_title", "电机跑合测试系统")
         )
@@ -58,6 +79,53 @@ class MainWindow(QMainWindow):
         for index, serial_input in enumerate(self.serial_inputs):
             serial_input.returnPressed.connect(partial(self._accept_scan, index))
             serial_input.textChanged.connect(self._update_sn_progress)
+            serial_input.textEdited.connect(
+                partial(self._on_sn_text_edited, index)
+            )
+
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        """兼容扫码枪发送的 Return、Enter、CR、LF 和未知控制键。"""
+        if watched in self.serial_inputs and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            text = event.text() or ""
+            if (
+                key in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                or "\r" in text
+                or "\n" in text
+            ):
+                self._accept_scan(self.serial_inputs.index(watched))
+                return True
+        return super().eventFilter(watched, event)
+
+    def _on_sn_text_edited(self, index: int, text: str) -> None:
+        """扫码无有效结束符时，通过快速输入后的短暂停顿自动确认。"""
+        if "\r" in text or "\n" in text:
+            sanitized = text.replace("\r", "").replace("\n", "").strip()
+            self.serial_inputs[index].setText(sanitized)
+            self._accept_scan(index)
+            return
+
+        if not text:
+            self.scan_started_at[index] = None
+            self.scan_timers[index].stop()
+            return
+
+        if self.scan_started_at[index] is None:
+            self.scan_started_at[index] = monotonic()
+        self.scan_timers[index].start(self.scanner_auto_finish_delay_ms)
+
+    def _finish_timed_scan(self, index: int) -> None:
+        serial_number = self.serial_inputs[index].text().strip()
+        started_at = self.scan_started_at[index]
+        if not serial_number or started_at is None:
+            return
+
+        duration_ms = (monotonic() - started_at) * 1000
+        if (
+            len(serial_number) >= self.scanner_min_length
+            and duration_ms <= self.scanner_max_input_duration_ms
+        ):
+            self._accept_scan(index)
 
     def _configure_plc_status(self) -> None:
         plc_config = self.config["devices"]["plc"]
@@ -115,6 +183,8 @@ class MainWindow(QMainWindow):
         return [serial_input.text().strip() for serial_input in self.serial_inputs]
 
     def _accept_scan(self, index: int) -> None:
+        self.scan_timers[index].stop()
+        self.scan_started_at[index] = None
         serial_input = self.serial_inputs[index]
         serial_number = self.serial_number_service.normalize(serial_input.text())
         serial_input.setText(serial_number)
@@ -163,7 +233,9 @@ class MainWindow(QMainWindow):
         )
 
     def _clear_serial_numbers(self) -> None:
-        for serial_input in self.serial_inputs:
+        for index, serial_input in enumerate(self.serial_inputs):
+            self.scan_timers[index].stop()
+            self.scan_started_at[index] = None
             serial_input.clear()
         self.serial_inputs[0].setFocus()
         self.append_log("已清空当前托盘的 10 个 SN。")
