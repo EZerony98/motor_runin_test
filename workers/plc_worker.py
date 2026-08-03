@@ -10,6 +10,7 @@ from drivers.plc_fins import FinsPlcDriver
 class PlcWorker(QObject):
     connection_changed = Signal(bool, str)
     tray_id_changed = Signal(str)
+    release_button_pressed = Signal()
     write_succeeded = Signal(str)
     write_failed = Signal(str)
     log = Signal(str)
@@ -22,6 +23,7 @@ class PlcWorker(QObject):
         self.poll_interval_ms = max(100, int(config.get("poll_interval_ms", 500)))
         self.timer: Optional[QTimer] = None
         self.last_tray_id: Optional[str] = None
+        self.last_release_button_state: Optional[bool] = None
         self.last_connection_state: Optional[bool] = None
 
     @Slot()
@@ -42,12 +44,20 @@ class PlcWorker(QObject):
             if not self.driver.is_connected:
                 self.driver.connect()
             tray_id = self.driver.read_tray_id()
+            release_button_state = self.driver.read_release_button()
             self._emit_connection(True, "PLC 已连接")
             if tray_id != self.last_tray_id:
                 self.last_tray_id = tray_id
                 self.tray_id_changed.emit(tray_id)
+            if (
+                self.last_release_button_state is False
+                and release_button_state is True
+            ):
+                self.release_button_pressed.emit()
+            self.last_release_button_state = release_button_state
         except Exception as error:
             self.driver.disconnect()
+            self.last_release_button_state = None
             self._emit_connection(False, f"PLC 未连接：{error}")
 
     @Slot(str, list)

@@ -10,7 +10,6 @@ class SerialNumberError(ValueError):
 
 class SerialNumberService:
     MOTOR_COUNT = 10
-    UINT32_MAX = 0xFFFFFFFF
     _TRAILING_NUMBER = re.compile(r"^(.*?)(\d+)$")
 
     @staticmethod
@@ -57,18 +56,24 @@ class SerialNumberService:
             raise SerialNumberError("存在重复 SN：" + "、".join(duplicates))
         return normalized
 
-    def validate_plc_uint32_batch(
-        self, serial_numbers: Iterable[str]
+    def validate_plc_ascii_batch(
+        self, serial_numbers: Iterable[str], max_bytes: int
     ) -> List[str]:
-        """校验每个 SN 都能写入两个 D 寄存器组成的 UINT32。"""
+        """校验每个 SN 都能写入 PLC 的定长 ASCII STRING。"""
         normalized = self.validate_batch(serial_numbers)
         for position, serial_number in enumerate(normalized, start=1):
-            if not serial_number.isdigit():
+            try:
+                encoded = serial_number.encode("ascii")
+            except UnicodeEncodeError as error:
                 raise SerialNumberError(
-                    f"位置 {position} 的 SN 必须是纯数字，才能写入两个 D 寄存器"
+                    f"位置 {position} 的 SN 含有非 ASCII 字符"
+                ) from error
+            if any(byte < 0x20 or byte > 0x7E for byte in encoded):
+                raise SerialNumberError(
+                    f"位置 {position} 的 SN 含有不可显示的控制字符"
                 )
-            if int(serial_number) > self.UINT32_MAX:
+            if len(encoded) > max_bytes:
                 raise SerialNumberError(
-                    f"位置 {position} 的 SN 超出 UINT32 最大值 {self.UINT32_MAX}"
+                    f"位置 {position} 的 SN 最多允许 {max_bytes} 个 ASCII 字符"
                 )
         return normalized

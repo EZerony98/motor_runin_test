@@ -4,11 +4,6 @@
     "window_title": "电机跑合测试系统",
     "language": "zh_CN"
   },
-  "scanner": {
-    "auto_finish_delay_ms": 180,
-    "max_input_duration_ms": 2000,
-    "min_serial_length": 3
-  },
   "logging": {
     "level": "INFO",
     "directory": "logs"

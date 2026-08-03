@@ -25,10 +25,10 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.window.close()
 
     def test_fill_button_generates_ten_serial_numbers(self) -> None:
-        self.window.serial_inputs[0].setText("00000001")
+        self.window.serial_inputs[0].setText("C66HNI042665")
         self.window.ui.fillButton.click()
-        self.assertEqual(self.window.serial_numbers()[0], "00000001")
-        self.assertEqual(self.window.serial_numbers()[-1], "00000010")
+        self.assertEqual(self.window.serial_numbers()[0], "C66HNI042665")
+        self.assertEqual(self.window.serial_numbers()[-1], "C66HNI042674")
 
     def test_submit_emits_tray_and_serial_numbers(self) -> None:
         submissions = []
@@ -38,13 +38,35 @@ class MainWindowSerialEntryTests(unittest.TestCase):
             )
         )
         self.window.set_tray_id("TRAY-001")
-        self.window.serial_inputs[0].setText("00000101")
+        self.window.serial_inputs[0].setText("C66HNI042665")
         self.window.ui.fillButton.click()
         self.window.ui.submitButton.click()
 
         self.assertEqual(len(submissions), 1)
         self.assertEqual(submissions[0][0], "TRAY-001")
-        self.assertEqual(submissions[0][1][-1], "00000110")
+        self.assertEqual(submissions[0][1][-1], "C66HNI042674")
+
+    def test_release_button_clears_tray_and_all_serial_numbers(self) -> None:
+        self.window.set_tray_id("7001")
+        self.window.serial_inputs[0].setText("C66HNI042665")
+        self.window.ui.fillButton.click()
+
+        self.window._on_release_button_pressed()
+
+        self.assertEqual(self.window.ui.trayIdEdit.text(), "")
+        self.assertEqual(self.window.serial_numbers(), [""] * 10)
+        self.assertIn("已放行", self.window.ui.logOutput.toPlainText())
+
+    def test_tray_layout_uses_two_rows_of_five_inputs(self) -> None:
+        self.window.resize(1024, 720)
+        self.app.processEvents()
+
+        top_row_y = {item.geometry().y() for item in self.window.serial_inputs[:5]}
+        bottom_row_y = {item.geometry().y() for item in self.window.serial_inputs[5:]}
+        self.assertEqual(len(top_row_y), 1)
+        self.assertEqual(len(bottom_row_y), 1)
+        self.assertGreater(next(iter(bottom_row_y)), next(iter(top_row_y)))
+        self.assertIsNotNone(self.window.ui.logoLabel.pixmap())
 
     def test_scanner_cr_control_character_advances_focus(self) -> None:
         first_input = self.window.serial_inputs[0]
@@ -64,17 +86,15 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.assertTrue(second_input.hasFocus())
         self.assertIn("位置 1 扫码完成", self.window.ui.logOutput.toPlainText())
 
-    def test_fast_scanner_input_auto_advances_without_enter(self) -> None:
+    def test_input_without_terminator_does_not_auto_advance(self) -> None:
         first_input = self.window.serial_inputs[0]
-        second_input = self.window.serial_inputs[1]
         first_input.setFocus()
 
         QTest.keyClicks(first_input, "00020001", delay=5)
-        QTest.qWait(self.window.scanner_auto_finish_delay_ms + 80)
+        QTest.qWait(300)
 
-        self.assertTrue(second_input.hasFocus())
+        self.assertTrue(first_input.hasFocus())
         self.assertEqual(first_input.text(), "00020001")
-
 
 if __name__ == "__main__":
     unittest.main()

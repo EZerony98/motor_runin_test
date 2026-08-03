@@ -34,23 +34,27 @@ ui/ui_main.py。ui_main.py 是生成文件，不应手工修改。
 
 1. PLC 读取 RFID 后调用 MainWindow.set_tray_id(tray_id) 显示托盘编号。
 2. 扫码器按键盘输入方式录入 SN，扫码结束发送回车即可自动跳到下一位置。
-   程序兼容 Return、Enter、CR、LF；若扫码枪结束符未被 Qt 识别，快速输入
-   停止 180 ms 后也会自动确认。相关参数在 config/app.json 的 scanner 中。
+   程序兼容 Return、Enter、CR 和 LF，不启用延时自动确认。
 3. 只扫描第一个 SN 时，可点击“顺序补齐”生成其余 9 个连续 SN。
 4. 点击“写入 PLC”后，主窗口发出 serial_numbers_ready(tray_id, serial_numbers)
    信号；后台 PLC 线程完成实际寄存器写入和回读校验。
+5. PLC 实体放行按钮 `%D3000.00` 出现上升沿时，程序清空托盘号和全部
+   SN，准备下一盘上料；按钮按 100 ms 周期轮询，保持按下不会重复触发。
 
 ## PLC 托盘数据映射
 
-- D3580-D3581：RFID 托盘号，只读。
-- D3582-D3583：位置 1 电机 SN。
-- D3584-D3585：位置 2 电机 SN。
-- 后续位置每次递增 2 个 D 寄存器。
-- D3600-D3601：位置 10 电机 SN。
+- `%D3000.00`：实体放行按钮，只读。
+- `%D3008`：RFID 托盘号，按 INT16 占用 1 个字，只读。
+- `%D3456-%D3505`：位置 1 产品 SN，`stringData[0]`。
+- `%D3506-%D3555`：位置 2 产品 SN，`stringData[1]`。
+- 后续位置每次递增 50 个 D 寄存器。
+- `%D3906-%D3955`：位置 10 产品 SN，`stringData[9]`。
 
-托盘号和每个 SN 均按 UINT32/UDINT 保存，默认低字在前、高字在后。二维码
-中的 SN 必须是纯数字且不超过 4294967295。PLC 地址、字序和连接参数均可在
-config/devices.json 中调整。
+每个产品 SN 使用一个 50 字（100 字节）的 Sysmac 定长 STRING 区，按 ASCII
+编码并写入 NULL 结束符，最大可保存 99 个单字节字符。默认第一个字符写在
+D 字的低字节（`low_high`）；如果现场 PLC 监控发现字符成对颠倒，可将
+config/devices.json 的 `serial_byte_order` 改为 `high_low`。每次写入会将该
+STRING 剩余空间清零，并进行完整 50 字回读校验。
 
 ## 开发约定
 
