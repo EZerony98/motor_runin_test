@@ -21,7 +21,7 @@
       "tray_id_words": 1,
       "tray_id_type": "int16",
       "serial_start_address": 3456,
-      "serial_slot_words": 50,
+      "serial_slot_words": 25,
       "serial_count": 10,
       "serial_encoding": "ascii",
       "serial_byte_order": "low_high"

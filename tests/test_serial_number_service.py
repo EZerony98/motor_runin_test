@@ -30,18 +30,18 @@ class SerialNumberServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(SerialNumberError, "非 ASCII"):
             self.service.validate_plc_ascii_batch(
                 [f"C66HNI{i:06d}" for i in range(9)] + ["电机10"],
-                max_bytes=99,
+                max_bytes=49,
             )
 
     def test_plc_batch_accepts_alphanumeric_serial_numbers(self) -> None:
         serial_numbers = [f"C66HNI{i:06d}" for i in range(1, 11)]
         self.assertEqual(
-            self.service.validate_plc_ascii_batch(serial_numbers, max_bytes=99),
+            self.service.validate_plc_ascii_batch(serial_numbers, max_bytes=49),
             serial_numbers,
         )
 
     def test_plc_batch_enforces_string_capacity(self) -> None:
         serial_numbers = [f"SN{i:02d}" for i in range(10)]
-        serial_numbers[-1] = "A" * 100
-        with self.assertRaisesRegex(SerialNumberError, "最多允许 99"):
-            self.service.validate_plc_ascii_batch(serial_numbers, max_bytes=99)
+        serial_numbers[-1] = "A" * 50
+        with self.assertRaisesRegex(SerialNumberError, "最多允许 49"):
+            self.service.validate_plc_ascii_batch(serial_numbers, max_bytes=49)

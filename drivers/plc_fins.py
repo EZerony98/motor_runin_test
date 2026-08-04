@@ -40,7 +40,7 @@ class FinsPlcDriver(BaseDevice):
         self.tray_id_words = int(mapping.get("tray_id_words", 1))
         self.tray_id_type = str(mapping.get("tray_id_type", "int16")).lower()
         self.serial_start_address = int(mapping.get("serial_start_address", 3456))
-        self.serial_slot_words = int(mapping.get("serial_slot_words", 50))
+        self.serial_slot_words = int(mapping.get("serial_slot_words", 25))
         self.serial_count = int(mapping.get("serial_count", self.MOTOR_COUNT))
         self.serial_encoding = str(mapping.get("serial_encoding", "ascii")).lower()
         self.serial_byte_order = str(
@@ -153,7 +153,7 @@ class FinsPlcDriver(BaseDevice):
     def write_tray_serial_numbers(
         self, tray_id: str, serial_numbers: Sequence[str]
     ) -> None:
-        """将 10 个 ASCII SN 写入 D3456 起、每项间隔 50 字的 STRING 区。"""
+        """将 10 个 ASCII SN 写入 D3456 起、每项间隔 25 字的 STRING[50]。"""
         self._require_connection()
         if len(serial_numbers) != self.serial_count:
             raise ValueError(f"PLC 写入要求正好 {self.serial_count} 个 SN")

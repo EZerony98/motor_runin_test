@@ -19,7 +19,7 @@ def simulation_config():
             "tray_id_words": 1,
             "tray_id_type": "int16",
             "serial_start_address": 3456,
-            "serial_slot_words": 50,
+            "serial_slot_words": 25,
             "serial_count": 10,
             "serial_encoding": "ascii",
             "serial_byte_order": "low_high",
@@ -48,13 +48,15 @@ class FinsPlcDriverTests(unittest.TestCase):
             },
         )
         self.assertEqual(self.driver.tray_id_address, 3008)
-        self.assertEqual(self.driver.serial_addresses[0], 3456)
-        self.assertEqual(self.driver.serial_addresses[-1], 3906)
-        self.assertEqual(self.driver.last_serial_address, 3955)
-        self.assertEqual(self.driver.serial_max_bytes, 99)
+        self.assertEqual(
+            self.driver.serial_addresses,
+            [3456, 3481, 3506, 3531, 3556, 3581, 3606, 3631, 3656, 3681],
+        )
+        self.assertEqual(self.driver.last_serial_address, 3705)
+        self.assertEqual(self.driver.serial_max_bytes, 49)
 
     def test_ascii_string_uses_sysmac_low_byte_first_layout(self) -> None:
-        words = self.driver.ascii_to_words("C66HNI042665", 50, "low_high")
+        words = self.driver.ascii_to_words("C66HNI042665", 25, "low_high")
         self.assertEqual(
             words[:7],
             [0x3643, 0x4836, 0x494E, 0x3430, 0x3632, 0x3536, 0x0000],
@@ -70,8 +72,8 @@ class FinsPlcDriverTests(unittest.TestCase):
         self.driver.write_tray_serial_numbers("7001", serial_numbers)
 
         self.assertEqual(self.driver.read_tray_id(), "7001")
-        first_words = self.driver.read_words(3456, 50)
-        last_words = self.driver.read_words(3906, 50)
+        first_words = self.driver.read_words(3456, 25)
+        last_words = self.driver.read_words(3681, 25)
         self.assertEqual(
             self.driver.words_to_ascii(first_words, "low_high"),
             serial_numbers[0],
@@ -80,6 +82,16 @@ class FinsPlcDriverTests(unittest.TestCase):
             self.driver.words_to_ascii(last_words, "low_high"),
             serial_numbers[-1],
         )
+        self.assertEqual(
+            [
+                self.driver.words_to_ascii(
+                    self.driver.read_words(address, 25), "low_high"
+                )
+                for address in self.driver.serial_addresses
+            ],
+            serial_numbers,
+        )
+        self.assertEqual(self.driver.read_words(3706, 25), [0] * 25)
 
     def test_release_button_reads_d3000_bit_zero(self) -> None:
         self.assertFalse(self.driver.read_release_button())
