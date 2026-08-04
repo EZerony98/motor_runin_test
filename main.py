@@ -25,6 +25,7 @@ class MainWindow(QMainWindow):
     """跑合测试主窗口。"""
 
     serial_numbers_ready = Signal(str, list)
+    plc_control_requested = Signal(str, bool)
 
     def __init__(self, start_plc: bool = True) -> None:
         super().__init__()
@@ -32,6 +33,12 @@ class MainWindow(QMainWindow):
         self.serial_number_service = SerialNumberService()
         self.plc_thread: Optional[QThread] = None
         self.plc_worker: Optional[PlcWorker] = None
+        self.plc_control_states = {
+            "mode_auto": False,
+            "reset": False,
+            "start": False,
+            "emergency_stop_ok": False,
+        }
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.serial_inputs: List[QLineEdit] = list(
@@ -57,6 +64,22 @@ class MainWindow(QMainWindow):
         self.ui.fillButton.clicked.connect(self._fill_serial_numbers)
         self.ui.clearButton.clicked.connect(self._clear_serial_numbers)
         self.ui.submitButton.clicked.connect(self._submit_serial_numbers)
+        self.ui.modeButton.clicked.connect(self._request_mode_change)
+        self.ui.resetButton.pressed.connect(
+            partial(self._request_momentary_control, "reset", True)
+        )
+        self.ui.resetButton.released.connect(
+            partial(self._request_momentary_control, "reset", False)
+        )
+        self.ui.startButton.pressed.connect(
+            partial(self._request_momentary_control, "start", True)
+        )
+        self.ui.startButton.released.connect(
+            partial(self._request_momentary_control, "start", False)
+        )
+        self.ui.emergencyButton.clicked.connect(
+            self._request_emergency_change
+        )
 
         for index, serial_input in enumerate(self.serial_inputs):
             serial_input.returnPressed.connect(partial(self._accept_scan, index))
@@ -121,10 +144,20 @@ class MainWindow(QMainWindow):
         self.plc_worker.release_button_pressed.connect(
             self._on_release_button_pressed
         )
+        self.plc_worker.control_states_changed.connect(
+            self._update_plc_control_states
+        )
+        self.plc_worker.control_write_succeeded.connect(
+            self._on_control_write_succeeded
+        )
+        self.plc_worker.control_write_failed.connect(
+            self._on_control_write_failed
+        )
         self.plc_worker.write_succeeded.connect(self._on_plc_write_succeeded)
         self.plc_worker.write_failed.connect(self._on_plc_write_failed)
         self.plc_worker.finished.connect(self.plc_thread.quit)
         self.serial_numbers_ready.connect(self.plc_worker.write_serial_numbers)
+        self.plc_control_requested.connect(self.plc_worker.write_control)
         self.plc_thread.start()
 
     def _set_plc_connection(self, connected: bool, message: str) -> None:
@@ -143,8 +176,74 @@ class MainWindow(QMainWindow):
                 "padding: 0 14px; font-weight: 600;"
             )
         self.ui.plcConnectionLabel.setToolTip(message)
+        for button in (
+            self.ui.modeButton,
+            self.ui.resetButton,
+            self.ui.startButton,
+            self.ui.emergencyButton,
+        ):
+            button.setEnabled(connected)
         self.statusBar().showMessage(message)
         self.append_log(message)
+
+    def _request_mode_change(self, automatic: bool) -> None:
+        self._set_mode_button(automatic)
+        self.plc_control_requested.emit("mode_auto", automatic)
+        self.append_log(
+            f"请求切换为{'自动' if automatic else '手动'}模式。"
+        )
+
+    def _request_momentary_control(self, name: str, pressed: bool) -> None:
+        self.plc_control_requested.emit(name, pressed)
+        label = "复位" if name == "reset" else "启动"
+        self.append_log(f"{label}按钮{'按下' if pressed else '松开'}。")
+
+    def _request_emergency_change(self, emergency_active: bool) -> None:
+        emergency_stop_ok = not emergency_active
+        self._set_emergency_button(emergency_stop_ok)
+        self.plc_control_requested.emit(
+            "emergency_stop_ok", emergency_stop_ok
+        )
+        self.append_log(
+            "请求进入急停状态。"
+            if emergency_active
+            else "请求解除急停状态。"
+        )
+
+    def _update_plc_control_states(self, states: dict) -> None:
+        self.plc_control_states.update(states)
+        self._set_mode_button(self.plc_control_states["mode_auto"])
+        self.ui.resetButton.setDown(self.plc_control_states["reset"])
+        self.ui.startButton.setDown(self.plc_control_states["start"])
+        self._set_emergency_button(
+            self.plc_control_states["emergency_stop_ok"]
+        )
+
+    def _set_mode_button(self, automatic: bool) -> None:
+        self.ui.modeButton.setChecked(automatic)
+        self.ui.modeButton.setText("自动模式" if automatic else "手动模式")
+
+    def _set_emergency_button(self, emergency_stop_ok: bool) -> None:
+        emergency_active = not emergency_stop_ok
+        self.ui.emergencyButton.setChecked(emergency_active)
+        self.ui.emergencyButton.setText(
+            "急停中" if emergency_active else "急停正常"
+        )
+
+    def _on_control_write_succeeded(self, name: str, value: bool) -> None:
+        self.plc_control_states[name] = value
+        self._update_plc_control_states(self.plc_control_states)
+
+    def _on_control_write_failed(self, name: str, message: str) -> None:
+        labels = {
+            "mode_auto": "模式切换",
+            "reset": "复位",
+            "start": "启动",
+            "emergency_stop_ok": "急停",
+        }
+        label = labels.get(name, name)
+        self.append_log(f"PLC {label}命令写入失败：{message}")
+        QMessageBox.warning(self, "PLC 控制失败", f"{label}命令失败：{message}")
 
     def set_tray_id(self, tray_id: str) -> None:
         """由 PLC 通信层在读取到 RFID 托盘编号后调用。"""

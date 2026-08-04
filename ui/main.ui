@@ -12,7 +12,7 @@
   </property>
   <property name="minimumSize">
    <size>
-    <width>1024</width>
+    <width>1180</width>
     <height>720</height>
    </size>
   </property>
@@ -33,6 +33,11 @@ QFrame#testPanel, QFrame#logPanel {
     background: white;
     border: 1px solid #d8dee5;
     border-radius: 12px;
+}
+QFrame#machineControlPanel {
+    background: #ffffff;
+    border: 1px solid #d8dee5;
+    border-radius: 11px;
 }
 QLabel#logoLabel {
     background: transparent;
@@ -78,6 +83,48 @@ QPushButton {
 QPushButton:hover {
     background: #fff1f3;
     border-color: #d41432;
+}
+QPushButton#modeButton {
+    color: #245b88;
+    border-color: #9fc1dd;
+    background: #edf6fd;
+    font-weight: 700;
+}
+QPushButton#modeButton:checked {
+    color: #ffffff;
+    border-color: #2477b3;
+    background: #2477b3;
+}
+QPushButton#resetButton {
+    color: #8a5a00;
+    border-color: #dfc27c;
+    background: #fff9e8;
+    font-weight: 700;
+}
+QPushButton#startButton {
+    color: #ffffff;
+    border-color: #20834f;
+    background: #20834f;
+    font-weight: 700;
+}
+QPushButton#startButton:pressed {
+    background: #14683d;
+}
+QPushButton#emergencyButton {
+    color: #b42334;
+    border-color: #e09aa5;
+    background: #fff3f5;
+    font-weight: 700;
+}
+QPushButton#emergencyButton:checked {
+    color: #ffffff;
+    border-color: #c8102e;
+    background: #c8102e;
+}
+QPushButton:disabled {
+    color: #9aa5b1;
+    border-color: #d6dce2;
+    background: #eef1f4;
 }
 QPushButton#submitButton {
     color: white;
@@ -193,17 +240,101 @@ QPlainTextEdit {
        </layout>
       </item>
       <item>
-       <spacer name="headerSpacer">
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
+       <widget class="QFrame" name="machineControlPanel">
+        <property name="minimumSize">
          <size>
-          <width>40</width>
-          <height>20</height>
+          <width>400</width>
+          <height>62</height>
          </size>
         </property>
-       </spacer>
+        <layout class="QHBoxLayout" name="machineControlLayout">
+         <property name="spacing">
+          <number>8</number>
+         </property>
+         <property name="leftMargin">
+          <number>10</number>
+         </property>
+         <property name="topMargin">
+          <number>10</number>
+         </property>
+         <property name="rightMargin">
+          <number>10</number>
+         </property>
+         <property name="bottomMargin">
+          <number>10</number>
+         </property>
+         <item>
+          <widget class="QPushButton" name="modeButton">
+           <property name="minimumSize">
+            <size>
+             <width>100</width>
+             <height>38</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>模式未知</string>
+           </property>
+           <property name="checkable">
+            <bool>true</bool>
+           </property>
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="resetButton">
+           <property name="minimumSize">
+            <size>
+             <width>72</width>
+             <height>38</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>复位</string>
+           </property>
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="startButton">
+           <property name="minimumSize">
+            <size>
+             <width>72</width>
+             <height>38</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>启动</string>
+           </property>
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="emergencyButton">
+           <property name="minimumSize">
+            <size>
+             <width>96</width>
+             <height>38</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>急停未知</string>
+           </property>
+           <property name="checkable">
+            <bool>true</bool>
+           </property>
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
       </item>
       <item>
        <layout class="QVBoxLayout" name="plcStatusLayout">

@@ -58,7 +58,7 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.assertIn("已放行", self.window.ui.logOutput.toPlainText())
 
     def test_tray_layout_uses_two_rows_of_five_inputs(self) -> None:
-        self.window.resize(1024, 720)
+        self.window.resize(1180, 720)
         self.app.processEvents()
 
         top_row_y = {item.geometry().y() for item in self.window.serial_inputs[:5]}
@@ -67,6 +67,40 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.assertEqual(len(bottom_row_y), 1)
         self.assertGreater(next(iter(bottom_row_y)), next(iter(top_row_y)))
         self.assertIsNotNone(self.window.ui.logoLabel.pixmap())
+
+    def test_plc_control_buttons_follow_required_bit_behaviour(self) -> None:
+        requests = []
+        self.window.plc_control_requested.connect(
+            lambda name, value: requests.append((name, value))
+        )
+        self.window._set_plc_connection(True, "测试连接")
+        self.window._update_plc_control_states(
+            {
+                "mode_auto": False,
+                "reset": False,
+                "start": False,
+                "emergency_stop_ok": True,
+            }
+        )
+
+        self.window.ui.modeButton.click()
+        QTest.mousePress(self.window.ui.resetButton, Qt.MouseButton.LeftButton)
+        QTest.mouseRelease(self.window.ui.resetButton, Qt.MouseButton.LeftButton)
+        QTest.mousePress(self.window.ui.startButton, Qt.MouseButton.LeftButton)
+        QTest.mouseRelease(self.window.ui.startButton, Qt.MouseButton.LeftButton)
+        self.window.ui.emergencyButton.click()
+
+        self.assertEqual(
+            requests,
+            [
+                ("mode_auto", True),
+                ("reset", True),
+                ("reset", False),
+                ("start", True),
+                ("start", False),
+                ("emergency_stop_ok", False),
+            ],
+        )
 
     def test_scanner_cr_control_character_advances_focus(self) -> None:
         first_input = self.window.serial_inputs[0]

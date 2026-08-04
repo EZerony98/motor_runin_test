@@ -9,8 +9,12 @@ def simulation_config():
         "port": 9600,
         "simulation": True,
         "mapping": {
-            "release_button_address": 3000,
+            "control_word_address": 3000,
             "release_button_bit": 0,
+            "mode_button_bit": 1,
+            "reset_button_bit": 2,
+            "start_button_bit": 3,
+            "emergency_stop_bit": 4,
             "tray_id_address": 3008,
             "tray_id_words": 1,
             "tray_id_type": "int16",
@@ -32,8 +36,17 @@ class FinsPlcDriverTests(unittest.TestCase):
         self.driver.disconnect()
 
     def test_register_mapping_matches_sysmac_variables(self) -> None:
-        self.assertEqual(self.driver.release_button_address, 3000)
+        self.assertEqual(self.driver.control_word_address, 3000)
         self.assertEqual(self.driver.release_button_bit, 0)
+        self.assertEqual(
+            self.driver.control_bits,
+            {
+                "mode_auto": 1,
+                "reset": 2,
+                "start": 3,
+                "emergency_stop_ok": 4,
+            },
+        )
         self.assertEqual(self.driver.tray_id_address, 3008)
         self.assertEqual(self.driver.serial_addresses[0], 3456)
         self.assertEqual(self.driver.serial_addresses[-1], 3906)
@@ -74,6 +87,41 @@ class FinsPlcDriverTests(unittest.TestCase):
         self.assertTrue(self.driver.read_release_button())
         self.driver.set_simulated_release_button(False)
         self.assertFalse(self.driver.read_release_button())
+
+    def test_control_bits_write_independently(self) -> None:
+        self.driver.set_simulated_release_button(True)
+        self.driver.write_control("mode_auto", True)
+        self.driver.write_control("reset", True)
+        self.driver.write_control("start", False)
+        self.driver.write_control("emergency_stop_ok", True)
+
+        states = self.driver.read_control_states()
+        self.assertEqual(
+            states,
+            {
+                "mode_auto": True,
+                "reset": True,
+                "start": False,
+                "emergency_stop_ok": True,
+                "release_button": True,
+            },
+        )
+        self.assertEqual(self.driver.read_words(3000, 1), [0b10111])
+
+    def test_real_control_write_uses_fins_dm_bit_command(self) -> None:
+        config = simulation_config()
+        config["simulation"] = False
+        driver = FinsPlcDriver(config)
+        commands = []
+        driver._connected = True
+        driver._request = lambda command: commands.append(command) or bytes(14)
+
+        driver.write_control("mode_auto", True)
+
+        self.assertEqual(
+            commands,
+            [b"\x01\x02\x02\x0b\xb8\x01\x00\x01\x01"],
+        )
 
     def test_non_ascii_serial_number_is_rejected(self) -> None:
         self.driver.set_simulated_tray_id("7001")

@@ -11,8 +11,12 @@
     "service_id": 1,
     "simulation": false,
     "mapping": {
-      "release_button_address": 3000,
+      "control_word_address": 3000,
       "release_button_bit": 0,
+      "mode_button_bit": 1,
+      "reset_button_bit": 2,
+      "start_button_bit": 3,
+      "emergency_stop_bit": 4,
       "tray_id_address": 3008,
       "tray_id_words": 1,
       "tray_id_type": "int16",

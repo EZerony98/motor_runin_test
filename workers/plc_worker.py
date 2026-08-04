@@ -11,6 +11,9 @@ class PlcWorker(QObject):
     connection_changed = Signal(bool, str)
     tray_id_changed = Signal(str)
     release_button_pressed = Signal()
+    control_states_changed = Signal(dict)
+    control_write_succeeded = Signal(str, bool)
+    control_write_failed = Signal(str, str)
     write_succeeded = Signal(str)
     write_failed = Signal(str)
     log = Signal(str)
@@ -24,6 +27,7 @@ class PlcWorker(QObject):
         self.timer: Optional[QTimer] = None
         self.last_tray_id: Optional[str] = None
         self.last_release_button_state: Optional[bool] = None
+        self.last_control_states: Optional[Dict[str, bool]] = None
         self.last_connection_state: Optional[bool] = None
 
     @Slot()
@@ -44,7 +48,8 @@ class PlcWorker(QObject):
             if not self.driver.is_connected:
                 self.driver.connect()
             tray_id = self.driver.read_tray_id()
-            release_button_state = self.driver.read_release_button()
+            control_states = self.driver.read_control_states()
+            release_button_state = control_states.pop("release_button")
             self._emit_connection(True, "PLC 已连接")
             if tray_id != self.last_tray_id:
                 self.last_tray_id = tray_id
@@ -55,10 +60,28 @@ class PlcWorker(QObject):
             ):
                 self.release_button_pressed.emit()
             self.last_release_button_state = release_button_state
+            if control_states != self.last_control_states:
+                self.last_control_states = dict(control_states)
+                self.control_states_changed.emit(control_states)
         except Exception as error:
             self.driver.disconnect()
             self.last_release_button_state = None
+            self.last_control_states = None
             self._emit_connection(False, f"PLC 未连接：{error}")
+
+    @Slot(str, bool)
+    def write_control(self, name: str, value: bool) -> None:
+        try:
+            if not self.driver.is_connected:
+                self.driver.connect()
+            self.driver.write_control(name, value)
+            self._emit_connection(True, "PLC 已连接")
+            self.control_write_succeeded.emit(name, value)
+        except Exception as error:
+            self.driver.disconnect()
+            self.last_control_states = None
+            self._emit_connection(False, f"PLC 未连接：{error}")
+            self.control_write_failed.emit(name, str(error))
 
     @Slot(str, list)
     def write_serial_numbers(self, tray_id: str, serial_numbers: List[str]) -> None:
@@ -79,6 +102,12 @@ class PlcWorker(QObject):
             self.timer.stop()
             self.timer.deleteLater()
             self.timer = None
+        if self.driver.is_connected:
+            for name in ("reset", "start"):
+                try:
+                    self.driver.write_control(name, False)
+                except Exception:
+                    break
         self.driver.disconnect()
         self.finished.emit()
 

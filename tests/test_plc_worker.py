@@ -26,6 +26,25 @@ class PlcWorkerTests(unittest.TestCase):
 
         self.assertEqual(presses, [True, True])
 
+    def test_control_write_and_poll_emit_current_states(self) -> None:
+        writes = []
+        states = []
+        self.worker.control_write_succeeded.connect(
+            lambda name, value: writes.append((name, value))
+        )
+        self.worker.control_states_changed.connect(states.append)
+
+        self.worker.write_control("mode_auto", True)
+        self.worker.write_control("emergency_stop_ok", True)
+        self.worker.poll()
+
+        self.assertEqual(
+            writes,
+            [("mode_auto", True), ("emergency_stop_ok", True)],
+        )
+        self.assertEqual(states[-1]["mode_auto"], True)
+        self.assertEqual(states[-1]["emergency_stop_ok"], True)
+
 
 if __name__ == "__main__":
     unittest.main()

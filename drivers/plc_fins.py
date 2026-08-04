@@ -11,6 +11,7 @@ class FinsProtocolError(DeviceConnectionError):
 
 
 class FinsPlcDriver(BaseDevice):
+    DM_BIT_AREA = 0x02
     DM_WORD_AREA = 0x82
     MOTOR_COUNT = 10
     INT16_MIN = -0x8000
@@ -27,10 +28,14 @@ class FinsPlcDriver(BaseDevice):
         self.simulation = bool(config.get("simulation", False))
 
         mapping = config.get("mapping", {})
-        self.release_button_address = int(
-            mapping.get("release_button_address", 3000)
-        )
+        self.control_word_address = int(mapping.get("control_word_address", 3000))
         self.release_button_bit = int(mapping.get("release_button_bit", 0))
+        self.control_bits = {
+            "mode_auto": int(mapping.get("mode_button_bit", 1)),
+            "reset": int(mapping.get("reset_button_bit", 2)),
+            "start": int(mapping.get("start_button_bit", 3)),
+            "emergency_stop_ok": int(mapping.get("emergency_stop_bit", 4)),
+        }
         self.tray_id_address = int(mapping.get("tray_id_address", 3008))
         self.tray_id_words = int(mapping.get("tray_id_words", 1))
         self.tray_id_type = str(mapping.get("tray_id_type", "int16")).lower()
@@ -42,8 +47,11 @@ class FinsPlcDriver(BaseDevice):
             mapping.get("serial_byte_order", "low_high")
         ).lower()
 
-        if not 0 <= self.release_button_bit <= 15:
-            raise ValueError("PLC 放行按钮位必须在 0-15 之间")
+        configured_bits = [self.release_button_bit, *self.control_bits.values()]
+        if any(not 0 <= bit <= 15 for bit in configured_bits):
+            raise ValueError("PLC 控制位必须在 0-15 之间")
+        if len(set(configured_bits)) != len(configured_bits):
+            raise ValueError("PLC 控制位配置不能重复")
         if self.tray_id_words != 1 or self.tray_id_type != "int16":
             raise ValueError("托盘号当前必须按 INT16 占用 1 个 D 寄存器")
         if self.serial_count != self.MOTOR_COUNT:
@@ -86,7 +94,7 @@ class FinsPlcDriver(BaseDevice):
         self._socket.connect((self.host, self.port))
         try:
             self.read_words(self.tray_id_address, self.tray_id_words)
-            self.read_words(self.release_button_address, 1)
+            self.read_words(self.control_word_address, 1)
         except Exception:
             self.disconnect()
             raise
@@ -99,15 +107,41 @@ class FinsPlcDriver(BaseDevice):
         self._connected = False
 
     def read(self) -> Dict[str, Any]:
+        control_states = self.read_control_states()
         return {
             "tray_id": self.read_tray_id(),
-            "release_button": self.read_release_button(),
+            "release_button": control_states["release_button"],
+            "controls": {
+                name: control_states[name] for name in self.control_bits
+            },
         }
 
     def read_release_button(self) -> bool:
+        return self.read_control_states()["release_button"]
+
+    def read_control_states(self) -> Dict[str, bool]:
+        """一次读取 D3000，返回放行按钮和上位机控制位状态。"""
         self._require_connection()
-        value = self.read_words(self.release_button_address, 1)[0]
-        return bool(value & (1 << self.release_button_bit))
+        value = self.read_words(self.control_word_address, 1)[0]
+        states = {
+            name: bool(value & (1 << bit))
+            for name, bit in self.control_bits.items()
+        }
+        states["release_button"] = bool(
+            value & (1 << self.release_button_bit)
+        )
+        return states
+
+    def write_control(self, name: str, value: bool) -> None:
+        """按位写入一个上位机控制命令，不影响 D3000 的其他位。"""
+        self._require_connection()
+        if name not in self.control_bits:
+            raise ValueError(f"未知 PLC 控制项：{name}")
+        self.write_bit(
+            self.control_word_address,
+            self.control_bits[name],
+            bool(value),
+        )
 
     def read_tray_id(self) -> str:
         self._require_connection()
@@ -185,6 +219,25 @@ class FinsPlcDriver(BaseDevice):
         )
         self._request(command)
 
+    def write_bit(self, address: int, bit: int, value: bool) -> None:
+        if not 0 <= int(bit) <= 15:
+            raise ValueError(f"无效的 DM 位：{address}.{bit:02d}")
+        if self.simulation:
+            current = self._sim_words.get(int(address), 0)
+            mask = 1 << int(bit)
+            self._sim_words[int(address)] = (
+                current | mask if value else current & ~mask
+            )
+            return
+
+        command = (
+            bytes([0x01, 0x02, self.DM_BIT_AREA])
+            + self._encode_address(address, bit)
+            + (1).to_bytes(2, "big")
+            + bytes([1 if value else 0])
+        )
+        self._request(command)
+
     def set_simulated_tray_id(self, tray_id: str) -> None:
         if not self.simulation:
             raise RuntimeError("仅仿真模式支持直接设置托盘号")
@@ -193,10 +246,11 @@ class FinsPlcDriver(BaseDevice):
     def set_simulated_release_button(self, pressed: bool) -> None:
         if not self.simulation:
             raise RuntimeError("仅仿真模式支持直接设置放行按钮")
-        current = self.read_words(self.release_button_address, 1)[0]
-        mask = 1 << self.release_button_bit
-        value = current | mask if pressed else current & ~mask
-        self.write_words(self.release_button_address, [value])
+        self.write_bit(
+            self.control_word_address,
+            self.release_button_bit,
+            pressed,
+        )
 
     def _request(self, command: bytes) -> bytes:
         if self._socket is None:
@@ -246,10 +300,12 @@ class FinsPlcDriver(BaseDevice):
             raise DeviceConnectionError("PLC 未连接")
 
     @staticmethod
-    def _encode_address(address: int) -> bytes:
+    def _encode_address(address: int, bit: int = 0) -> bytes:
         if not 0 <= int(address) <= 0xFFFF:
             raise ValueError(f"无效的 DM 地址：{address}")
-        return int(address).to_bytes(2, "big") + b"\x00"
+        if not 0 <= int(bit) <= 15:
+            raise ValueError(f"无效的 DM 位：{address}.{bit:02d}")
+        return int(address).to_bytes(2, "big") + bytes([int(bit)])
 
     @classmethod
     def parse_int16(cls, value: str, field_name: str) -> int:

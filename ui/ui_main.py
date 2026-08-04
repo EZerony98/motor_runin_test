@@ -27,7 +27,7 @@ class Ui_MainWindow(object):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
         MainWindow.resize(1280, 820)
-        MainWindow.setMinimumSize(QSize(1024, 720))
+        MainWindow.setMinimumSize(QSize(1180, 720))
         MainWindow.setStyleSheet(u"QMainWindow, QWidget {\n"
 "    background: #f3f5f7;\n"
 "    color: #263442;\n"
@@ -41,6 +41,11 @@ class Ui_MainWindow(object):
 "    background: white;\n"
 "    border: 1px solid #d8dee5;\n"
 "    border-radius: 12px;\n"
+"}\n"
+"QFrame#machineControlPanel {\n"
+"    background: #ffffff;\n"
+"    border: 1px solid #d8dee5;\n"
+"    border-radius: 11px;\n"
 "}\n"
 "QLabel#logoLabel {\n"
 "    background: transparent;\n"
@@ -64,13 +69,13 @@ class Ui_MainWindow(object):
 "    font-weight: 700;\n"
 "}\n"
 "QLabel#plcConnectionLabel {\n"
-"    min-height: 30px;\n"
+"    min-he"
+                        "ight: 30px;\n"
 "    padding: 0 14px;\n"
 "    border: 1px solid #cbd5e1;\n"
 "    border-radius: 15px;\n"
 "    background: #eef2f6;\n"
-""
-                        "    color: #8a94a3;\n"
+"    color: #8a94a3;\n"
 "    font-weight: 600;\n"
 "}\n"
 "QLabel#plcAddressLabel {\n"
@@ -87,6 +92,49 @@ class Ui_MainWindow(object):
 "QPushButton:hover {\n"
 "    background: #fff1f3;\n"
 "    border-color: #d41432;\n"
+"}\n"
+"QPushButton#modeButton {\n"
+"    color: #245b88;\n"
+"    border-color: #9fc1dd;\n"
+"    background: #edf6fd;\n"
+"    font-weight: 700;\n"
+"}\n"
+"QPushButton#modeButton:checked {\n"
+"    color: #ffffff;\n"
+"    border-color: #2477b3;\n"
+"    background: #2477b3;\n"
+"}\n"
+"QPushButton#resetButton {\n"
+"    color: #8a5a00;\n"
+"    border-color: #dfc27c;\n"
+"    background: #fff9e8;\n"
+"    font-weight: 700;\n"
+"}\n"
+"QPushButton#startButton {\n"
+"    color: #ffffff;\n"
+"    border-color: #20834"
+                        "f;\n"
+"    background: #20834f;\n"
+"    font-weight: 700;\n"
+"}\n"
+"QPushButton#startButton:pressed {\n"
+"    background: #14683d;\n"
+"}\n"
+"QPushButton#emergencyButton {\n"
+"    color: #b42334;\n"
+"    border-color: #e09aa5;\n"
+"    background: #fff3f5;\n"
+"    font-weight: 700;\n"
+"}\n"
+"QPushButton#emergencyButton:checked {\n"
+"    color: #ffffff;\n"
+"    border-color: #c8102e;\n"
+"    background: #c8102e;\n"
+"}\n"
+"QPushButton:disabled {\n"
+"    color: #9aa5b1;\n"
+"    border-color: #d6dce2;\n"
+"    background: #eef1f4;\n"
 "}\n"
 "QPushButton#submitButton {\n"
 "    color: white;\n"
@@ -108,12 +156,12 @@ class Ui_MainWindow(object):
 "QLineEdit:focus {\n"
 "    border: 2px solid #d41432;\n"
 "}\n"
-"QLineEdit[traySnInput=\"true\"] {\n"
+""
+                        "QLineEdit[traySnInput=\"true\"] {\n"
 "    background: #ffffff;\n"
 "    font-family: Menlo, Consolas, monospace;\n"
 "    font-size: 13px;\n"
-" "
-                        "   font-weight: 600;\n"
+"    font-weight: 600;\n"
 "}\n"
 "QLineEdit#trayIdEdit {\n"
 "    background: #eef2f6;\n"
@@ -162,9 +210,45 @@ class Ui_MainWindow(object):
 
         self.headerLayout.addLayout(self.titleLayout)
 
-        self.headerSpacer = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.machineControlPanel = QFrame(self.centralwidget)
+        self.machineControlPanel.setObjectName(u"machineControlPanel")
+        self.machineControlPanel.setMinimumSize(QSize(400, 62))
+        self.machineControlLayout = QHBoxLayout(self.machineControlPanel)
+        self.machineControlLayout.setSpacing(8)
+        self.machineControlLayout.setObjectName(u"machineControlLayout")
+        self.machineControlLayout.setContentsMargins(10, 10, 10, 10)
+        self.modeButton = QPushButton(self.machineControlPanel)
+        self.modeButton.setObjectName(u"modeButton")
+        self.modeButton.setMinimumSize(QSize(100, 38))
+        self.modeButton.setCheckable(True)
+        self.modeButton.setEnabled(False)
 
-        self.headerLayout.addItem(self.headerSpacer)
+        self.machineControlLayout.addWidget(self.modeButton)
+
+        self.resetButton = QPushButton(self.machineControlPanel)
+        self.resetButton.setObjectName(u"resetButton")
+        self.resetButton.setMinimumSize(QSize(72, 38))
+        self.resetButton.setEnabled(False)
+
+        self.machineControlLayout.addWidget(self.resetButton)
+
+        self.startButton = QPushButton(self.machineControlPanel)
+        self.startButton.setObjectName(u"startButton")
+        self.startButton.setMinimumSize(QSize(72, 38))
+        self.startButton.setEnabled(False)
+
+        self.machineControlLayout.addWidget(self.startButton)
+
+        self.emergencyButton = QPushButton(self.machineControlPanel)
+        self.emergencyButton.setObjectName(u"emergencyButton")
+        self.emergencyButton.setMinimumSize(QSize(96, 38))
+        self.emergencyButton.setCheckable(True)
+        self.emergencyButton.setEnabled(False)
+
+        self.machineControlLayout.addWidget(self.emergencyButton)
+
+
+        self.headerLayout.addWidget(self.machineControlPanel)
 
         self.plcStatusLayout = QVBoxLayout()
         self.plcStatusLayout.setSpacing(2)
@@ -309,6 +393,10 @@ class Ui_MainWindow(object):
         self.logoLabel.setText("")
         self.titleLabel.setText(QCoreApplication.translate("MainWindow", u"\u7535\u673a\u8dd1\u5408\u6d4b\u8bd5\u7cfb\u7edf", None))
         self.subtitleLabel.setText(QCoreApplication.translate("MainWindow", u"Motor Run-in Test Station", None))
+        self.modeButton.setText(QCoreApplication.translate("MainWindow", u"\u6a21\u5f0f\u672a\u77e5", None))
+        self.resetButton.setText(QCoreApplication.translate("MainWindow", u"\u590d\u4f4d", None))
+        self.startButton.setText(QCoreApplication.translate("MainWindow", u"\u542f\u52a8", None))
+        self.emergencyButton.setText(QCoreApplication.translate("MainWindow", u"\u6025\u505c\u672a\u77e5", None))
         self.plcConnectionLabel.setText(QCoreApplication.translate("MainWindow", u"\u25cf PLC \u672a\u8fde\u63a5", None))
         self.plcAddressLabel.setText(QCoreApplication.translate("MainWindow", u"192.168.250.1:9600", None))
         self.testTitle.setText(QCoreApplication.translate("MainWindow", u"\u6258\u76d8\u4e0a\u6599\u4e0e SN \u5f55\u5165", None))
