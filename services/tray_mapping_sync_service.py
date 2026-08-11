@@ -1,8 +1,8 @@
 """向频谱电脑同步托盘坑位与产品 SN 映射。"""
 
+import json
 from typing import Any, Dict
-
-import requests
+from urllib.request import Request, urlopen
 
 
 class TrayMappingSyncService:
@@ -20,11 +20,17 @@ class TrayMappingSyncService:
         if not base_url:
             raise RuntimeError("未配置频谱电脑映射服务地址")
         token = str(self.config.get("token", ""))
-        headers = {"X-Line-Token": token} if token else {}
-        response = requests.post(
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        if token:
+            headers["X-Line-Token"] = token
+        request = Request(
             base_url + "/api/v1/tray-mappings",
-            json=batch,
+            data=json.dumps(batch, ensure_ascii=False).encode("utf-8"),
             headers=headers,
-            timeout=float(self.config.get("timeout_seconds", 2)),
+            method="POST",
         )
-        response.raise_for_status()
+        with urlopen(
+            request,
+            timeout=float(self.config.get("timeout_seconds", 2)),
+        ) as response:
+            response.read()

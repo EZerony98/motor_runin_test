@@ -1,9 +1,10 @@
 """测试结果服务器上传服务。"""
 
+import json
 import time
 from typing import Any, Dict
-
-import requests
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 class UploadService:
@@ -14,7 +15,7 @@ class UploadService:
     def enabled(self) -> bool:
         return bool(self.config.get("enabled", False))
 
-    def upload(self, record: Dict[str, Any]) -> requests.Response:
+    def upload(self, record: Dict[str, Any]) -> int:
         if not self.enabled:
             raise RuntimeError("服务器上传功能未启用")
 
@@ -30,10 +31,16 @@ class UploadService:
         last_error = None
         for attempt in range(retry_count):
             try:
-                response = requests.post(url, json=record, timeout=timeout)
-                response.raise_for_status()
-                return response
-            except requests.RequestException as error:
+                request = Request(
+                    url,
+                    data=json.dumps(record, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json; charset=utf-8"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=timeout) as response:
+                    response.read()
+                    return int(response.status)
+            except (HTTPError, URLError, TimeoutError, OSError) as error:
                 last_error = error
                 if attempt + 1 < retry_count:
                     time.sleep(retry_interval)
