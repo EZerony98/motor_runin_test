@@ -18,7 +18,7 @@ class TrayEntryWidget(QWidget):
     def __init__(self, parent: QWidget = None) -> None:
         super().__init__(parent)
         self.setObjectName("trayEntryWidget")
-        self.setMinimumHeight(330)
+        self.setMinimumHeight(260)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self.serial_inputs: List[QLineEdit] = []
@@ -54,19 +54,17 @@ class TrayEntryWidget(QWidget):
         painter.drawRoundedRect(tray_rect, 14, 14)
 
         self._draw_mounting_holes(painter, tray_rect)
-        for index in range(self.MOTOR_COUNT):
-            row = index // 5
-            column = index % 5
-            self._draw_motor(painter, index, row, column)
+        for slot in range(1, self.MOTOR_COUNT + 1):
+            row, column = self.slot_position(slot)
+            self._draw_motor(painter, slot, row, column)
 
     def _layout_inputs(self) -> None:
         column_width = self._column_width()
         row_band = (self.height() - 24) / 2
         input_width = max(120, min(190, int(column_width - 10)))
 
-        for index, serial_input in enumerate(self.serial_inputs):
-            row = index // 5
-            column = index % 5
+        for slot, serial_input in enumerate(self.serial_inputs, start=1):
+            row, column = self.slot_position(slot)
             center_x = self._column_center(column)
             band_top = 12 + row * row_band
             input_y = int(band_top + row_band - self.INPUT_HEIGHT - 8)
@@ -78,7 +76,7 @@ class TrayEntryWidget(QWidget):
             )
 
     def _draw_motor(
-        self, painter: QPainter, index: int, row: int, column: int
+        self, painter: QPainter, slot: int, row: int, column: int
     ) -> None:
         row_band = (self.height() - 24) / 2
         band_top = 12 + row * row_band
@@ -147,8 +145,17 @@ class TrayEntryWidget(QWidget):
         painter.drawText(
             badge,
             Qt.AlignmentFlag.AlignCenter,
-            f"{index + 1:02d}",
+            f"{slot:02d}",
         )
+
+    @classmethod
+    def slot_position(cls, slot: int) -> tuple[int, int]:
+        """返回逆时针坑位在两排五列托盘中的视觉位置。"""
+        if not 1 <= int(slot) <= cls.MOTOR_COUNT:
+            raise ValueError(f"无效托盘坑位：{slot}")
+        if slot <= 5:
+            return 1, slot - 1
+        return 0, 10 - slot
 
     def _draw_mounting_holes(self, painter: QPainter, tray_rect: QRectF) -> None:
         painter.setPen(QPen(QColor("#8795a5"), 1.5))

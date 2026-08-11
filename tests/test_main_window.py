@@ -1,5 +1,7 @@
 import os
+import tempfile
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -17,12 +19,15 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication(["main-window-test"])
 
     def setUp(self) -> None:
-        self.window = MainWindow(start_plc=False)
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        database_path = Path(self.temporary_directory.name) / "traceability.db"
+        self.window = MainWindow(start_plc=False, database_path=database_path)
         self.window.show()
         self.app.processEvents()
 
     def tearDown(self) -> None:
         self.window.close()
+        self.temporary_directory.cleanup()
 
     def test_fill_button_generates_ten_serial_numbers(self) -> None:
         self.window.serial_inputs[0].setText("C66HNI042665")
@@ -30,21 +35,34 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.assertEqual(self.window.serial_numbers()[0], "C66HNI042665")
         self.assertEqual(self.window.serial_numbers()[-1], "C66HNI042674")
 
-    def test_submit_emits_tray_and_serial_numbers(self) -> None:
-        submissions = []
-        self.window.serial_numbers_ready.connect(
-            lambda tray_id, serial_numbers: submissions.append(
-                (tray_id, serial_numbers)
-            )
-        )
+    def test_submit_saves_tray_mapping_locally(self) -> None:
         self.window.set_tray_id("TRAY-001")
         self.window.serial_inputs[0].setText("C66HNI042665")
         self.window.ui.fillButton.click()
         self.window.ui.submitButton.click()
 
-        self.assertEqual(len(submissions), 1)
-        self.assertEqual(submissions[0][0], "TRAY-001")
-        self.assertEqual(submissions[0][1][-1], "C66HNI042674")
+        first_product = self.window.traceability_service.resolve_product(
+            "TRAY-001", 1
+        )
+        last_product = self.window.traceability_service.resolve_product(
+            "TRAY-001", 10
+        )
+        self.assertEqual(first_product["product_sn"], "C66HNI042665")
+        self.assertEqual(last_product["product_sn"], "C66HNI042674")
+        self.assertEqual(self.window.ui.submitButton.text(), "保存上料信息")
+        self.assertIn("已保存到本地数据库", self.window.ui.logOutput.toPlainText())
+
+    def test_debug_tray_id_can_be_entered_manually_and_saved(self) -> None:
+        self.assertFalse(self.window.ui.trayIdEdit.isReadOnly())
+        self.window.ui.trayIdEdit.setText("DEBUG-TRAY-001")
+        self.window.serial_inputs[0].setText("C66HNI042665")
+        self.window.ui.fillButton.click()
+        self.window.ui.submitButton.click()
+
+        product = self.window.traceability_service.resolve_product(
+            "DEBUG-TRAY-001", 1
+        )
+        self.assertEqual(product["product_sn"], "C66HNI042665")
 
     def test_release_button_clears_tray_and_all_serial_numbers(self) -> None:
         self.window.set_tray_id("7001")
@@ -61,12 +79,63 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.window.resize(1180, 720)
         self.app.processEvents()
 
-        top_row_y = {item.geometry().y() for item in self.window.serial_inputs[:5]}
-        bottom_row_y = {item.geometry().y() for item in self.window.serial_inputs[5:]}
+        bottom_row_y = {
+            item.geometry().y() for item in self.window.serial_inputs[:5]
+        }
+        top_row_y = {
+            item.geometry().y() for item in self.window.serial_inputs[5:]
+        }
         self.assertEqual(len(top_row_y), 1)
         self.assertEqual(len(bottom_row_y), 1)
         self.assertGreater(next(iter(bottom_row_y)), next(iter(top_row_y)))
+        self.assertLess(
+            self.window.serial_inputs[0].geometry().x(),
+            self.window.serial_inputs[4].geometry().x(),
+        )
+        self.assertGreater(
+            self.window.serial_inputs[5].geometry().x(),
+            self.window.serial_inputs[9].geometry().x(),
+        )
         self.assertIsNotNone(self.window.ui.logoLabel.pixmap())
+
+    def test_four_runin_device_statuses_and_result_view_are_created(self) -> None:
+        self.assertEqual(len(self.window.runinStatusLabels), 4)
+        self.assertEqual(self.window.resultDeviceCombo.count(), 4)
+        self.assertEqual(len(self.window.runinResultWidget.sn_labels), 10)
+
+    def test_runin_tray_result_is_saved_and_displayed_by_slot(self) -> None:
+        self.window.set_tray_id("7001")
+        self.window.serial_inputs[0].setText("C66HNI042665")
+        self.window.ui.fillButton.click()
+        self.window.ui.submitButton.click()
+        snapshot = {
+            "device_id": "RUNIN_01",
+            "device_name": "跑合设备 1",
+            "tray_id": "7001",
+            "items": [
+                {
+                    "tray_slot": slot,
+                    "runin_current_a": 100 + slot,
+                    "runin_voltage_v": 200 + slot,
+                    "runin_speed_rpm": 17000 + slot,
+                    "runin_temperature_c": 40 + slot,
+                    "runin_passed": slot != 10,
+                    "runin_result_code": 0 if slot != 10 else 1,
+                }
+                for slot in range(1, 11)
+            ],
+        }
+
+        self.window._on_runin_result_ready("RUNIN_01", snapshot)
+
+        self.assertIn(
+            "C66HNI042665", self.window.runinResultWidget.sn_labels[0].text()
+        )
+        self.assertIn(
+            "C66HNI042674", self.window.runinResultWidget.sn_labels[9].text()
+        )
+        self.assertIn("NG", self.window.runinResultWidget.value_labels[9].text())
+        self.assertIn("已保存 10/10", self.window.runinResultStateLabel.text())
 
     def test_plc_control_buttons_follow_required_bit_behaviour(self) -> None:
         requests = []

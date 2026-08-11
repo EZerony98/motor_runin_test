@@ -18,11 +18,6 @@ def simulation_config():
             "tray_id_address": 3008,
             "tray_id_words": 1,
             "tray_id_type": "int16",
-            "serial_start_address": 3456,
-            "serial_slot_words": 25,
-            "serial_count": 10,
-            "serial_encoding": "ascii",
-            "serial_byte_order": "low_high",
         },
     }
 
@@ -48,53 +43,19 @@ class FinsPlcDriverTests(unittest.TestCase):
             },
         )
         self.assertEqual(self.driver.tray_id_address, 3008)
-        self.assertEqual(
-            self.driver.serial_addresses,
-            [3456, 3481, 3506, 3531, 3556, 3581, 3606, 3631, 3656, 3681],
-        )
-        self.assertEqual(self.driver.last_serial_address, 3705)
-        self.assertEqual(self.driver.serial_max_bytes, 49)
-
-    def test_ascii_string_uses_sysmac_low_byte_first_layout(self) -> None:
-        words = self.driver.ascii_to_words("C66HNI042665", 25, "low_high")
-        self.assertEqual(
-            words[:7],
-            [0x3643, 0x4836, 0x494E, 0x3430, 0x3632, 0x3536, 0x0000],
-        )
-        self.assertEqual(
-            self.driver.words_to_ascii(words, "low_high"),
-            "C66HNI042665",
-        )
-
-    def test_read_tray_and_write_ten_ascii_serial_numbers(self) -> None:
-        self.driver.set_simulated_tray_id("7001")
-        serial_numbers = [f"C66HNI{42665 + offset:06d}" for offset in range(10)]
-        self.driver.write_tray_serial_numbers("7001", serial_numbers)
-
-        self.assertEqual(self.driver.read_tray_id(), "7001")
-        first_words = self.driver.read_words(3456, 25)
-        last_words = self.driver.read_words(3681, 25)
-        self.assertEqual(
-            self.driver.words_to_ascii(first_words, "low_high"),
-            serial_numbers[0],
-        )
-        self.assertEqual(
-            self.driver.words_to_ascii(last_words, "low_high"),
-            serial_numbers[-1],
-        )
-        self.assertEqual(
-            [
-                self.driver.words_to_ascii(
-                    self.driver.read_words(address, 25), "low_high"
-                )
-                for address in self.driver.serial_addresses
-            ],
-            serial_numbers,
-        )
-        self.assertEqual(self.driver.read_words(3706, 25), [0] * 25)
 
     def test_release_button_reads_d3000_bit_zero(self) -> None:
         self.assertFalse(self.driver.read_release_button())
+
+    def test_simulation_tray_id_is_seeded_on_connect(self) -> None:
+        config = simulation_config()
+        config["simulation_tray_id"] = "7001"
+        driver = FinsPlcDriver(config)
+
+        driver.connect()
+
+        self.assertEqual(driver.read_tray_id(), "7001")
+        driver.disconnect()
         self.driver.set_simulated_release_button(True)
         self.assertTrue(self.driver.read_release_button())
         self.driver.set_simulated_release_button(False)
@@ -134,12 +95,6 @@ class FinsPlcDriverTests(unittest.TestCase):
             commands,
             [b"\x01\x02\x02\x0b\xb8\x01\x00\x01\x01"],
         )
-
-    def test_non_ascii_serial_number_is_rejected(self) -> None:
-        self.driver.set_simulated_tray_id("7001")
-        serial_numbers = [f"SN{offset:02d}" for offset in range(9)] + ["电机10"]
-        with self.assertRaisesRegex(ValueError, "非 ASCII"):
-            self.driver.write_tray_serial_numbers("7001", serial_numbers)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 """PLC 轮询与写入后台工作对象。"""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
@@ -14,8 +14,6 @@ class PlcWorker(QObject):
     control_states_changed = Signal(dict)
     control_write_succeeded = Signal(str, bool)
     control_write_failed = Signal(str, str)
-    write_succeeded = Signal(str)
-    write_failed = Signal(str)
     log = Signal(str)
     finished = Signal()
 
@@ -82,19 +80,6 @@ class PlcWorker(QObject):
             self.last_control_states = None
             self._emit_connection(False, f"PLC 未连接：{error}")
             self.control_write_failed.emit(name, str(error))
-
-    @Slot(str, list)
-    def write_serial_numbers(self, tray_id: str, serial_numbers: List[str]) -> None:
-        try:
-            if not self.driver.is_connected:
-                self.driver.connect()
-            self.driver.write_tray_serial_numbers(tray_id, serial_numbers)
-            self._emit_connection(True, "PLC 已连接")
-            self.write_succeeded.emit(tray_id)
-        except Exception as error:
-            self.driver.disconnect()
-            self._emit_connection(False, f"PLC 未连接：{error}")
-            self.write_failed.emit(str(error))
 
     @Slot()
     def stop(self) -> None:

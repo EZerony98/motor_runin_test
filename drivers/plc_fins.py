@@ -1,7 +1,7 @@
 """欧姆龙 PLC FINS/UDP 驱动及托盘数据映射。"""
 
 import socket
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional
 
 from .base_device import BaseDevice, DeviceConnectionError
 
@@ -13,7 +13,6 @@ class FinsProtocolError(DeviceConnectionError):
 class FinsPlcDriver(BaseDevice):
     DM_BIT_AREA = 0x02
     DM_WORD_AREA = 0x82
-    MOTOR_COUNT = 10
     INT16_MIN = -0x8000
     INT16_MAX = 0x7FFF
 
@@ -26,6 +25,9 @@ class FinsPlcDriver(BaseDevice):
         self.destination_node = int(config.get("destination_node", 1))
         self.service_id = int(config.get("service_id", 1)) & 0xFF or 1
         self.simulation = bool(config.get("simulation", False))
+        self.simulation_tray_id = str(
+            config.get("simulation_tray_id", "")
+        ).strip()
 
         mapping = config.get("mapping", {})
         self.control_word_address = int(mapping.get("control_word_address", 3000))
@@ -39,13 +41,6 @@ class FinsPlcDriver(BaseDevice):
         self.tray_id_address = int(mapping.get("tray_id_address", 3008))
         self.tray_id_words = int(mapping.get("tray_id_words", 1))
         self.tray_id_type = str(mapping.get("tray_id_type", "int16")).lower()
-        self.serial_start_address = int(mapping.get("serial_start_address", 3456))
-        self.serial_slot_words = int(mapping.get("serial_slot_words", 25))
-        self.serial_count = int(mapping.get("serial_count", self.MOTOR_COUNT))
-        self.serial_encoding = str(mapping.get("serial_encoding", "ascii")).lower()
-        self.serial_byte_order = str(
-            mapping.get("serial_byte_order", "low_high")
-        ).lower()
 
         configured_bits = [self.release_button_bit, *self.control_bits.values()]
         if any(not 0 <= bit <= 15 for bit in configured_bits):
@@ -54,51 +49,32 @@ class FinsPlcDriver(BaseDevice):
             raise ValueError("PLC 控制位配置不能重复")
         if self.tray_id_words != 1 or self.tray_id_type != "int16":
             raise ValueError("托盘号当前必须按 INT16 占用 1 个 D 寄存器")
-        if self.serial_count != self.MOTOR_COUNT:
-            raise ValueError("当前托盘配置必须包含 10 个电机")
-        if self.serial_slot_words < 1:
-            raise ValueError("每个 PLC STRING 至少需要占用 1 个 D 寄存器")
-        if self.serial_encoding != "ascii":
-            raise ValueError("产品 SN 当前仅支持 ASCII 编码")
-        if self.serial_byte_order not in {"low_high", "high_low"}:
-            raise ValueError("产品 SN 字节序必须是 low_high 或 high_low")
 
         self._socket: Optional[socket.socket] = None
         self._sim_words: Dict[int, int] = {}
-
-    @property
-    def last_serial_address(self) -> int:
-        return self.serial_start_address + self.serial_count * self.serial_slot_words - 1
-
-    @property
-    def serial_max_bytes(self) -> int:
-        """Sysmac STRING 的最后一个字节预留给 NULL 结束符。"""
-        return self.serial_slot_words * 2 - 1
-
-    @property
-    def serial_addresses(self) -> List[int]:
-        return [
-            self.serial_start_address + index * self.serial_slot_words
-            for index in range(self.serial_count)
-        ]
 
     def connect(self) -> None:
         if self.is_connected:
             return
         if self.simulation:
             self._connected = True
+            if self.simulation_tray_id:
+                self.set_simulated_tray_id(self.simulation_tray_id)
             return
 
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.settimeout(self.timeout)
         self._socket.connect((self.host, self.port))
         try:
-            self.read_words(self.tray_id_address, self.tray_id_words)
-            self.read_words(self.control_word_address, 1)
+            self._probe_connection()
         except Exception:
             self.disconnect()
             raise
         self._connected = True
+
+    def _probe_connection(self) -> None:
+        self.read_words(self.tray_id_address, self.tray_id_words)
+        self.read_words(self.control_word_address, 1)
 
     def disconnect(self) -> None:
         if self._socket is not None:
@@ -149,38 +125,6 @@ class FinsPlcDriver(BaseDevice):
         if value & 0x8000:
             value -= 0x10000
         return "" if value == 0 else str(value)
-
-    def write_tray_serial_numbers(
-        self, tray_id: str, serial_numbers: Sequence[str]
-    ) -> None:
-        """将 10 个 ASCII SN 写入 D3456 起、每项间隔 25 字的 STRING[50]。"""
-        self._require_connection()
-        if len(serial_numbers) != self.serial_count:
-            raise ValueError(f"PLC 写入要求正好 {self.serial_count} 个 SN")
-
-        current_tray_id = self.read_tray_id()
-        expected_tray_id = str(tray_id or "").strip()
-        if current_tray_id != expected_tray_id:
-            raise DeviceConnectionError(
-                f"托盘编号已变化：界面为 {expected_tray_id or '空'}，"
-                f"PLC D{self.tray_id_address} 为 {current_tray_id or '空'}"
-            )
-
-        for position, (address, serial_number) in enumerate(
-            zip(self.serial_addresses, serial_numbers), start=1
-        ):
-            words = self.ascii_to_words(
-                serial_number,
-                self.serial_slot_words,
-                self.serial_byte_order,
-            )
-            self.write_words(address, words)
-            readback = self.read_words(address, self.serial_slot_words)
-            if readback != words:
-                raise FinsProtocolError(
-                    f"PLC 第 {position} 个 SN 回读校验失败："
-                    f"D{address}-D{address + self.serial_slot_words - 1}"
-                )
 
     def read_words(self, address: int, count: int) -> List[int]:
         if self.simulation:
@@ -252,6 +196,11 @@ class FinsPlcDriver(BaseDevice):
             pressed,
         )
 
+    @staticmethod
+    def word_to_int16(value: int) -> int:
+        value = int(value) & 0xFFFF
+        return value - 0x10000 if value & 0x8000 else value
+
     def _request(self, command: bytes) -> bytes:
         if self._socket is None:
             raise DeviceConnectionError("PLC UDP Socket 未连接")
@@ -319,45 +268,3 @@ class FinsPlcDriver(BaseDevice):
                 f"{field_name} 超出 INT16 范围 {cls.INT16_MIN}-{cls.INT16_MAX}"
             )
         return number
-
-    @staticmethod
-    def ascii_to_words(
-        value: str, slot_words: int, byte_order: str = "low_high"
-    ) -> List[int]:
-        """将 ASCII 文本编码为带 NULL 结束符的 Sysmac 定长 STRING 字区。"""
-        try:
-            encoded = str(value or "").encode("ascii")
-        except UnicodeEncodeError as error:
-            raise ValueError("SN 含有非 ASCII 字符") from error
-
-        slot_bytes = int(slot_words) * 2
-        if len(encoded) >= slot_bytes:
-            raise ValueError(f"SN 最多允许 {slot_bytes - 1} 个 ASCII 字符")
-        data = encoded + bytes(slot_bytes - len(encoded))
-        words: List[int] = []
-        for index in range(0, len(data), 2):
-            first, second = data[index], data[index + 1]
-            if byte_order == "low_high":
-                words.append(first | (second << 8))
-            elif byte_order == "high_low":
-                words.append((first << 8) | second)
-            else:
-                raise ValueError(f"不支持的字符串字节序：{byte_order}")
-        return words
-
-    @staticmethod
-    def words_to_ascii(
-        words: Sequence[int], byte_order: str = "low_high"
-    ) -> str:
-        data = bytearray()
-        for word in words:
-            value = int(word) & 0xFFFF
-            low_byte = value & 0xFF
-            high_byte = (value >> 8) & 0xFF
-            if byte_order == "low_high":
-                data.extend((low_byte, high_byte))
-            elif byte_order == "high_low":
-                data.extend((high_byte, low_byte))
-            else:
-                raise ValueError(f"不支持的字符串字节序：{byte_order}")
-        return bytes(data).split(b"\x00", 1)[0].decode("ascii")

@@ -27,7 +27,7 @@ class Ui_MainWindow(object):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
         MainWindow.resize(1280, 820)
-        MainWindow.setMinimumSize(QSize(1180, 720))
+        MainWindow.setMinimumSize(QSize(1180, 820))
         MainWindow.setStyleSheet(u"QMainWindow, QWidget {\n"
 "    background: #f3f5f7;\n"
 "    color: #263442;\n"
@@ -306,7 +306,6 @@ class Ui_MainWindow(object):
         self.trayIdEdit = QLineEdit(self.testPanel)
         self.trayIdEdit.setObjectName(u"trayIdEdit")
         self.trayIdEdit.setMinimumSize(QSize(210, 0))
-        self.trayIdEdit.setReadOnly(True)
 
         self.trayInfoLayout.addWidget(self.trayIdEdit)
 
@@ -325,7 +324,7 @@ class Ui_MainWindow(object):
 
         self.trayEntryWidget = TrayEntryWidget(self.testPanel)
         self.trayEntryWidget.setObjectName(u"trayEntryWidget")
-        self.trayEntryWidget.setMinimumSize(QSize(0, 330))
+        self.trayEntryWidget.setMinimumSize(QSize(0, 260))
 
         self.testPanelLayout.addWidget(self.trayEntryWidget)
 
@@ -401,12 +400,13 @@ class Ui_MainWindow(object):
         self.plcAddressLabel.setText(QCoreApplication.translate("MainWindow", u"192.168.250.1:9600", None))
         self.testTitle.setText(QCoreApplication.translate("MainWindow", u"\u6258\u76d8\u4e0a\u6599\u4e0e SN \u5f55\u5165", None))
         self.testStateLabel.setText(QCoreApplication.translate("MainWindow", u"\u5f53\u524d\u72b6\u6001\uff1a\u7b49\u5f85\u6258\u76d8", None))
-        self.trayIdLabel.setText(QCoreApplication.translate("MainWindow", u"\u6258\u76d8\u7f16\u53f7", None))
-        self.trayIdEdit.setPlaceholderText(QCoreApplication.translate("MainWindow", u"\u7b49\u5f85 PLC \u8bfb\u53d6 RFID", None))
+        self.trayIdLabel.setText(QCoreApplication.translate("MainWindow", u"\u6258\u76d8\u7f16\u53f7\uff08\u8c03\u8bd5\u53ef\u624b\u8f93\uff09", None))
+        self.trayIdEdit.setPlaceholderText(QCoreApplication.translate("MainWindow", u"\u624b\u52a8\u8f93\u5165\u6258\u76d8\u7f16\u53f7\uff0c\u6216\u7b49\u5f85 PLC \u8bfb\u53d6 RFID", None))
+        self.trayIdEdit.setToolTip(QCoreApplication.translate("MainWindow", u"\u8c03\u8bd5\u65f6\u53ef\u624b\u52a8\u8f93\u5165\uff1bPLC \u8054\u673a\u540e\u4ecd\u4f1a\u81ea\u52a8\u66f4\u65b0\u6b64\u7f16\u53f7", None))
         self.scanHintLabel.setText(QCoreApplication.translate("MainWindow", u"\u626b\u7801\u540e\u6309\u56de\u8f66\u81ea\u52a8\u8fdb\u5165\u4e0b\u4e00\u4f4d\u7f6e", None))
         self.fillButton.setText(QCoreApplication.translate("MainWindow", u"\u987a\u5e8f\u8865\u9f50", None))
         self.clearButton.setText(QCoreApplication.translate("MainWindow", u"\u6e05\u7a7a SN", None))
-        self.submitButton.setText(QCoreApplication.translate("MainWindow", u"\u5199\u5165 PLC", None))
+        self.submitButton.setText(QCoreApplication.translate("MainWindow", u"\u4fdd\u5b58\u4e0a\u6599\u4fe1\u606f", None))
         self.logTitle.setText(QCoreApplication.translate("MainWindow", u"\u8fd0\u884c\u65e5\u5fd7", None))
         self.logOutput.setPlaceholderText(QCoreApplication.translate("MainWindow", u"\u7cfb\u7edf\u65e5\u5fd7\u5c06\u5728\u8fd9\u91cc\u663e\u793a\u2026\u2026", None))
     # retranslateUi

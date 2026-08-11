@@ -55,25 +55,3 @@ class SerialNumberService:
         if duplicates:
             raise SerialNumberError("存在重复 SN：" + "、".join(duplicates))
         return normalized
-
-    def validate_plc_ascii_batch(
-        self, serial_numbers: Iterable[str], max_bytes: int
-    ) -> List[str]:
-        """校验每个 SN 都能写入 PLC 的定长 ASCII STRING。"""
-        normalized = self.validate_batch(serial_numbers)
-        for position, serial_number in enumerate(normalized, start=1):
-            try:
-                encoded = serial_number.encode("ascii")
-            except UnicodeEncodeError as error:
-                raise SerialNumberError(
-                    f"位置 {position} 的 SN 含有非 ASCII 字符"
-                ) from error
-            if any(byte < 0x20 or byte > 0x7E for byte in encoded):
-                raise SerialNumberError(
-                    f"位置 {position} 的 SN 含有不可显示的控制字符"
-                )
-            if len(encoded) > max_bytes:
-                raise SerialNumberError(
-                    f"位置 {position} 的 SN 最多允许 {max_bytes} 个 ASCII 字符"
-                )
-        return normalized

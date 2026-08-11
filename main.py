@@ -4,17 +4,33 @@ import sys
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import List, Optional, Sequence
+from threading import Thread
+from typing import Any, Dict, List, Optional, Sequence
 
-from PySide6.QtCore import QEvent, QMetaObject, QThread, Qt, Signal
+from PySide6.QtCore import QEvent, QMetaObject, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QPixmap, QRegion
-from PySide6.QtWidgets import QApplication, QLineEdit, QMainWindow, QMessageBox
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
-from models.tray_batch import TrayBatch
 from services.config_service import ConfigService
 from services.serial_number_service import SerialNumberError, SerialNumberService
+from services.traceability_service import TraceabilityService
+from services.tray_mapping_sync_service import TrayMappingSyncService
+from ui.runin_result_widget import RuninResultWidget
 from ui.ui_main import Ui_MainWindow
 from workers.plc_worker import PlcWorker
+from workers.runin_plc_worker import RuninPlcWorker
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -24,15 +40,42 @@ CONFIG = ConfigService(PROJECT_DIR / "config")
 class MainWindow(QMainWindow):
     """跑合测试主窗口。"""
 
-    serial_numbers_ready = Signal(str, list)
     plc_control_requested = Signal(str, bool)
+    mapping_sync_succeeded = Signal(str, str)
+    mapping_sync_failed = Signal(str, str, str)
+    mapping_sync_finished = Signal()
+    runin_result_processed = Signal(str, bool)
 
-    def __init__(self, start_plc: bool = True) -> None:
+    def __init__(
+        self,
+        start_plc: bool = True,
+        database_path: Optional[Path] = None,
+    ) -> None:
         super().__init__()
         self.config = CONFIG.load_all()
         self.serial_number_service = SerialNumberService()
+        traceability_config = self.config["server"].get("traceability", {})
+        configured_database_path = Path(
+            str(traceability_config.get("database_path", "data/traceability.db"))
+        )
+        if not configured_database_path.is_absolute():
+            configured_database_path = PROJECT_DIR / configured_database_path
+        self.traceability_service = TraceabilityService(
+            database_path or configured_database_path
+        )
+        self.mapping_sync_service = TrayMappingSyncService(
+            traceability_config.get("spectrum_peer", {})
+        )
+        self.mapping_sync_running = False
         self.plc_thread: Optional[QThread] = None
         self.plc_worker: Optional[PlcWorker] = None
+        self.runin_plc_configs = list(
+            self.config["devices"].get("runin_plcs", [])
+        )
+        self.runin_threads: Dict[str, QThread] = {}
+        self.runin_workers: Dict[str, RuninPlcWorker] = {}
+        self.runin_snapshots: Dict[str, Dict[str, Any]] = {}
+        self.runin_records: Dict[str, List[Dict[str, Any]]] = {}
         self.plc_control_states = {
             "mode_auto": False,
             "reset": False,
@@ -41,6 +84,8 @@ class MainWindow(QMainWindow):
         }
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+        self._configure_runin_workspace()
+        self.ui.submitButton.setText("保存上料信息")
         self.serial_inputs: List[QLineEdit] = list(
             self.ui.trayEntryWidget.serial_inputs
         )
@@ -50,15 +95,44 @@ class MainWindow(QMainWindow):
             self.config["app"]["application"].get("window_title", "电机跑合测试系统")
         )
         self._connect_signals()
+        self.mapping_sync_timer = QTimer(self)
+        self.mapping_sync_timer.setInterval(
+            max(
+                5,
+                int(
+                    traceability_config.get("spectrum_peer", {}).get(
+                        "retry_interval_seconds", 15
+                    )
+                ),
+            )
+            * 1000
+        )
+        self.mapping_sync_timer.timeout.connect(
+            self._sync_pending_tray_mappings
+        )
+        if self.mapping_sync_service.enabled:
+            self.mapping_sync_timer.start()
+            QTimer.singleShot(0, self._sync_pending_tray_mappings)
         self._configure_branding()
         self._configure_plc_status()
         if start_plc:
             self._start_plc_worker()
+            self._start_runin_plc_workers()
         else:
-            self._set_plc_connection(False, "PLC 未启动")
+            self._set_plc_connection(False, "总控 PLC 未启动")
+            for config in self.runin_plc_configs:
+                self._set_runin_connection(
+                    str(config.get("id")),
+                    False,
+                    f"{config.get('name', config.get('id'))} "
+                    + ("未启动" if config.get("enabled") else "未启用"),
+                )
         self._update_sn_progress()
         self.serial_inputs[0].setFocus()
-        self.append_log("应用启动完成，等待 PLC 读取托盘编号并录入 10 个电机 SN。")
+        self.append_log(
+            "应用启动完成，等待 PLC 读取托盘编号并录入 10 个电机 SN；"
+            "SN 仅保存到上位机，不再写入 PLC。"
+        )
 
     def _connect_signals(self) -> None:
         self.ui.fillButton.clicked.connect(self._fill_serial_numbers)
@@ -80,6 +154,9 @@ class MainWindow(QMainWindow):
         self.ui.emergencyButton.clicked.connect(
             self._request_emergency_change
         )
+        self.mapping_sync_succeeded.connect(self._on_mapping_sync_succeeded)
+        self.mapping_sync_failed.connect(self._on_mapping_sync_failed)
+        self.mapping_sync_finished.connect(self._on_mapping_sync_finished)
 
         for index, serial_input in enumerate(self.serial_inputs):
             serial_input.returnPressed.connect(partial(self._accept_scan, index))
@@ -111,9 +188,132 @@ class MainWindow(QMainWindow):
 
     def _configure_plc_status(self) -> None:
         plc_config = self.config["devices"]["plc"]
+        self.ui.plcConnectionLabel.setText("● 总控 PLC 未连接")
         self.ui.plcAddressLabel.setText(
             f"{plc_config.get('host', '')}:{plc_config.get('port', 9600)}"
         )
+
+    def _configure_runin_workspace(self) -> None:
+        self.setStyleSheet(
+            self.styleSheet()
+            + """
+QFrame#runinStatusPanel {
+    background: #ffffff;
+    border: 1px solid #d8dee5;
+    border-radius: 9px;
+}
+QLabel[runinDeviceStatus="true"] {
+    min-height: 28px;
+    padding: 0 12px;
+    border: 1px solid #d6dce2;
+    border-radius: 14px;
+    background: #eef1f4;
+    color: #7b8794;
+    font-weight: 600;
+}
+QLabel[runinSn="true"] {
+    border: 1px solid #c7d1db;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #334e68;
+    font-family: Menlo, Consolas, monospace;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel[runinValue="true"] {
+    border-radius: 4px;
+    background: #f7f9fb;
+    color: #607286;
+    font-family: Menlo, Consolas, monospace;
+    font-size: 10px;
+}
+QLabel[runinValue="true"][passed="ok"] {
+    background: #e9f7ef;
+    color: #137333;
+}
+QLabel[runinValue="true"][passed="ng"] {
+    background: #fff0f2;
+    color: #b42334;
+}
+QTabWidget::pane {
+    border: none;
+}
+QTabBar::tab {
+    min-width: 110px;
+    min-height: 30px;
+    padding: 0 12px;
+}
+QTabBar::tab:selected {
+    color: #d41432;
+    font-weight: 700;
+}
+"""
+        )
+
+        self.runinStatusPanel = QFrame(self.ui.centralwidget)
+        self.runinStatusPanel.setObjectName("runinStatusPanel")
+        status_layout = QHBoxLayout(self.runinStatusPanel)
+        status_layout.setContentsMargins(12, 6, 12, 6)
+        status_layout.setSpacing(10)
+        title = QLabel("跑合设备连接", self.runinStatusPanel)
+        title.setStyleSheet("font-weight: 700; color: #33404d;")
+        status_layout.addWidget(title)
+        self.runinStatusLabels: Dict[str, QLabel] = {}
+        for config in self.runin_plc_configs:
+            device_id = str(config.get("id"))
+            label = QLabel(self.runinStatusPanel)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setProperty("runinDeviceStatus", True)
+            self.runinStatusLabels[device_id] = label
+            status_layout.addWidget(label, 1)
+        self.ui.rootLayout.insertWidget(1, self.runinStatusPanel)
+
+        existing_items = []
+        while self.ui.testPanelLayout.count():
+            existing_items.append(self.ui.testPanelLayout.takeAt(0))
+        self.workspaceTabs = QTabWidget(self.ui.testPanel)
+        self.workspaceTabs.setObjectName("workspaceTabs")
+
+        input_tab = QWidget(self.workspaceTabs)
+        input_layout = QVBoxLayout(input_tab)
+        input_layout.setContentsMargins(0, 0, 0, 0)
+        input_layout.setSpacing(8)
+        for item in existing_items:
+            if item.widget() is not None:
+                input_layout.addWidget(item.widget())
+            elif item.layout() is not None:
+                input_layout.addLayout(item.layout())
+        self.workspaceTabs.addTab(input_tab, "上料扫码")
+
+        result_tab = QWidget(self.workspaceTabs)
+        result_layout = QVBoxLayout(result_tab)
+        result_layout.setContentsMargins(0, 4, 0, 0)
+        result_layout.setSpacing(8)
+        result_header = QHBoxLayout()
+        result_header.addWidget(QLabel("显示设备", result_tab))
+        self.resultDeviceCombo = QComboBox(result_tab)
+        for config in self.runin_plc_configs:
+            self.resultDeviceCombo.addItem(
+                f"{config.get('name')}  {config.get('host')}",
+                str(config.get("id")),
+            )
+        result_header.addWidget(self.resultDeviceCombo)
+        result_header.addSpacing(18)
+        self.runinTrayLabel = QLabel("当前卸载托盘：--", result_tab)
+        self.runinTrayLabel.setStyleSheet("font-weight: 700;")
+        result_header.addWidget(self.runinTrayLabel)
+        result_header.addStretch(1)
+        self.runinResultStateLabel = QLabel("等待跑合设备数据", result_tab)
+        self.runinResultStateLabel.setStyleSheet("color: #627d98;")
+        result_header.addWidget(self.runinResultStateLabel)
+        result_layout.addLayout(result_header)
+        self.runinResultWidget = RuninResultWidget(result_tab)
+        result_layout.addWidget(self.runinResultWidget, 1)
+        self.workspaceTabs.addTab(result_tab, "跑合数据")
+        self.resultDeviceCombo.currentIndexChanged.connect(
+            self._display_selected_runin_result
+        )
+        self.ui.testPanelLayout.addWidget(self.workspaceTabs)
 
     def _configure_branding(self) -> None:
         logo = QPixmap(str(PROJECT_DIR / "assets" / "logo.png"))
@@ -153,23 +353,90 @@ class MainWindow(QMainWindow):
         self.plc_worker.control_write_failed.connect(
             self._on_control_write_failed
         )
-        self.plc_worker.write_succeeded.connect(self._on_plc_write_succeeded)
-        self.plc_worker.write_failed.connect(self._on_plc_write_failed)
         self.plc_worker.finished.connect(self.plc_thread.quit)
-        self.serial_numbers_ready.connect(self.plc_worker.write_serial_numbers)
         self.plc_control_requested.connect(self.plc_worker.write_control)
         self.plc_thread.start()
 
+    def _start_runin_plc_workers(self) -> None:
+        for config in self.runin_plc_configs:
+            device_id = str(config.get("id"))
+            if not bool(config.get("enabled", False)):
+                self._set_runin_connection(
+                    device_id,
+                    False,
+                    f"{config.get('name', device_id)} 未启用",
+                )
+                continue
+            thread = QThread(self)
+            worker = RuninPlcWorker(config)
+            worker.moveToThread(thread)
+            thread.started.connect(worker.start)
+            worker.connection_changed.connect(self._set_runin_connection)
+            worker.result_ready.connect(self._on_runin_result_ready)
+            worker.log.connect(self.append_log)
+            worker.finished.connect(thread.quit)
+            self.runin_result_processed.connect(
+                worker.handle_result_processed
+            )
+            self.runin_threads[device_id] = thread
+            self.runin_workers[device_id] = worker
+            self._set_runin_connection(
+                device_id,
+                False,
+                f"{config.get('name', device_id)} 连接中",
+            )
+            thread.start()
+
+    def _set_runin_connection(
+        self, device_id: str, connected: bool, message: str
+    ) -> None:
+        label = self.runinStatusLabels.get(str(device_id))
+        if label is None:
+            return
+        config = next(
+            (
+                item
+                for item in self.runin_plc_configs
+                if str(item.get("id")) == str(device_id)
+            ),
+            {},
+        )
+        name = str(config.get("name", device_id))
+        enabled = bool(config.get("enabled", False))
+        if connected:
+            state = "已连接"
+            style = (
+                "background: #e9f7ef; color: #137333; "
+                "border: 1px solid #a7d7b5; border-radius: 14px;"
+            )
+        elif not enabled:
+            state = "未启用"
+            style = (
+                "background: #eef1f4; color: #7b8794; "
+                "border: 1px solid #d6dce2; border-radius: 14px;"
+            )
+        else:
+            state = "未连接"
+            style = (
+                "background: #fff4e5; color: #a15c00; "
+                "border: 1px solid #efc98f; border-radius: 14px;"
+            )
+        label.setText(f"● {name} {state}")
+        label.setStyleSheet(style)
+        label.setToolTip(
+            f"{config.get('host', '')}:{config.get('port', 9600)}\n{message}"
+        )
+
     def _set_plc_connection(self, connected: bool, message: str) -> None:
         if connected:
-            self.ui.plcConnectionLabel.setText("● PLC 已连接")
+            self.ui.plcConnectionLabel.setText("● 总控 PLC 已连接")
             self.ui.plcConnectionLabel.setStyleSheet(
                 "background: #e9f7ef; color: #137333; "
                 "border: 1px solid #a7d7b5; border-radius: 15px; "
                 "padding: 0 14px; font-weight: 600;"
             )
         else:
-            self.ui.plcConnectionLabel.setText("● PLC 未连接")
+            self.ui.plcConnectionLabel.setText("● 总控 PLC 未连接")
             self.ui.plcConnectionLabel.setStyleSheet(
                 "background: #fff4e5; color: #a15c00; "
                 "border: 1px solid #efc98f; border-radius: 15px; "
@@ -332,44 +599,167 @@ class MainWindow(QMainWindow):
     def _submit_serial_numbers(self) -> None:
         tray_id = self.ui.trayIdEdit.text().strip()
         if not tray_id:
-            self._warn("尚未收到 PLC 读取的托盘编号，不能写入 SN。")
+            self._warn("请输入托盘编号，或等待 PLC 读取 RFID 后再保存上料信息。")
             return
 
         try:
-            mapping = self.config["devices"]["plc"]["mapping"]
-            max_bytes = int(mapping["serial_slot_words"]) * 2 - 1
-            serial_numbers = self.serial_number_service.validate_plc_ascii_batch(
-                self.serial_numbers(), max_bytes=max_bytes
+            serial_numbers = self.serial_number_service.validate_batch(
+                self.serial_numbers()
             )
+            too_long_positions = [
+                str(index)
+                for index, serial_number in enumerate(serial_numbers, start=1)
+                if len(serial_number) > 50
+            ]
+            if too_long_positions:
+                raise SerialNumberError(
+                    "以下位置的 SN 超过 PostgreSQL VARCHAR(50)："
+                    + "、".join(too_long_positions)
+                )
         except SerialNumberError as error:
             self._warn(str(error))
             return
 
-        batch = TrayBatch(tray_id=tray_id, serial_numbers=serial_numbers)
-        self.serial_numbers_ready.emit(batch.tray_id, batch.serial_numbers)
-        self.ui.testStateLabel.setText("当前状态：等待 PLC 写入确认")
+        try:
+            batch = self.traceability_service.save_tray_batch(
+                tray_id, serial_numbers
+            )
+        except Exception as error:
+            self._warn(f"上料信息本地保存失败：{error}")
+            return
+
+        self.ui.testStateLabel.setText("当前状态：上料信息已保存")
         self.append_log(
-            f"托盘 {batch.tray_id} 的 10 个 SN 已生成 PLC 写入请求。"
+            f"托盘 {tray_id} 的 10 个坑位与 SN 已保存到本地数据库，"
+            f"批次 {batch['tray_cycle_id']}。"
+        )
+        self._sync_pending_tray_mappings()
+
+    def _sync_pending_tray_mappings(self) -> None:
+        if not self.mapping_sync_service.enabled:
+            self.append_log("频谱电脑映射同步未启用，数据保留在本机等待配置。")
+            return
+        if self.mapping_sync_running:
+            return
+        self.mapping_sync_running = True
+        Thread(target=self._run_mapping_sync, daemon=True).start()
+
+    def _run_mapping_sync(self) -> None:
+        try:
+            for batch in self.traceability_service.pending_peer_batches():
+                tray_cycle_id = batch["tray_cycle_id"]
+                try:
+                    self.mapping_sync_service.send(batch)
+                except Exception as error:
+                    self.traceability_service.mark_peer_sync_failed(
+                        tray_cycle_id, str(error)
+                    )
+                    self.mapping_sync_failed.emit(
+                        tray_cycle_id, batch["tray_id"], str(error)
+                    )
+                    continue
+                self.traceability_service.mark_peer_synced(tray_cycle_id)
+                self.mapping_sync_succeeded.emit(
+                    tray_cycle_id, batch["tray_id"]
+                )
+        finally:
+            self.mapping_sync_finished.emit()
+
+    def _on_mapping_sync_succeeded(
+        self, tray_cycle_id: str, tray_id: str
+    ) -> None:
+        self.append_log(
+            f"托盘 {tray_id} 的坑位与 SN 映射已同步到频谱电脑。"
         )
 
-    def _on_plc_write_succeeded(self, tray_id: str) -> None:
-        mapping = self.config["devices"]["plc"]["mapping"]
-        start_address = int(mapping["serial_start_address"])
-        end_address = (
-            start_address
-            + int(mapping["serial_count"]) * int(mapping["serial_slot_words"])
-            - 1
-        )
-        self.ui.testStateLabel.setText("当前状态：PLC 写入完成")
+    def _on_mapping_sync_failed(
+        self, tray_cycle_id: str, tray_id: str, message: str
+    ) -> None:
         self.append_log(
-            f"托盘 {tray_id} 的 10 个 SN 已写入 "
-            f"D{start_address}-D{end_address} 并通过回读校验。"
+            f"托盘 {tray_id} 映射同步失败，已保留待重试：{message}"
         )
 
-    def _on_plc_write_failed(self, message: str) -> None:
-        self.ui.testStateLabel.setText("当前状态：PLC 写入失败")
-        self.append_log(f"PLC 写入失败：{message}")
-        QMessageBox.warning(self, "PLC 写入失败", message)
+    def _on_mapping_sync_finished(self) -> None:
+        self.mapping_sync_running = False
+
+    def _on_runin_result_ready(
+        self, device_id: str, snapshot: Dict[str, Any]
+    ) -> None:
+        """显示、关联并保存一盘10个产品结果，成功后通知PLC放行。"""
+        device_id = str(device_id)
+        self.runin_snapshots[device_id] = dict(snapshot)
+        selected_index = self.resultDeviceCombo.findData(device_id)
+        if selected_index >= 0:
+            self.resultDeviceCombo.setCurrentIndex(selected_index)
+        tray_id = str(snapshot.get("tray_id", "")).strip()
+        raw_items = [dict(item) for item in snapshot.get("items", [])]
+        self.runinResultWidget.set_results(raw_items)
+        self.runinTrayLabel.setText(f"当前卸载托盘：{tray_id or '--'}")
+        self.runinResultStateLabel.setText("正在匹配 SN 并保存本地数据…")
+        self.runinResultStateLabel.setStyleSheet("color: #627d98;")
+
+        try:
+            records = self.traceability_service.save_runin_tray_results(
+                tray_id,
+                device_id,
+                raw_items,
+            )
+        except Exception as error:
+            self.runinResultStateLabel.setText(f"保存失败：{error}")
+            self.runinResultStateLabel.setStyleSheet(
+                "color: #b42334; font-weight: 700;"
+            )
+            self.append_log(
+                f"{snapshot.get('device_name', device_id)} 托盘 {tray_id} "
+                f"跑合数据未确认：{error}"
+            )
+            self.runin_result_processed.emit(device_id, False)
+            return
+
+        self.runin_records[device_id] = records
+        self.runinResultWidget.set_results(records)
+        passed_count = sum(bool(item["runin_passed"]) for item in records)
+        self.runinResultStateLabel.setText(
+            f"已保存 10/10，合格 {passed_count}，不合格 {10 - passed_count}"
+        )
+        self.runinResultStateLabel.setStyleSheet(
+            "color: #137333; font-weight: 700;"
+        )
+        self.workspaceTabs.setTabText(1, f"跑合数据 · {tray_id}")
+        self.append_log(
+            f"{snapshot.get('device_name', device_id)} 托盘 {tray_id} 的 "
+            "10 个产品跑合数据已保存，向 PLC 写入读取完成确认。"
+        )
+        self.runin_result_processed.emit(device_id, True)
+
+    def _display_selected_runin_result(self) -> None:
+        device_id = str(self.resultDeviceCombo.currentData() or "")
+        records = self.runin_records.get(device_id)
+        snapshot = self.runin_snapshots.get(device_id)
+        if records:
+            self.runinResultWidget.set_results(records)
+            tray_id = str(records[0].get("tray_id", ""))
+            passed_count = sum(bool(item["runin_passed"]) for item in records)
+            self.runinTrayLabel.setText(f"当前卸载托盘：{tray_id or '--'}")
+            self.runinResultStateLabel.setText(
+                f"已保存 10/10，合格 {passed_count}，不合格 {10 - passed_count}"
+            )
+            self.runinResultStateLabel.setStyleSheet(
+                "color: #137333; font-weight: 700;"
+            )
+            return
+        if snapshot:
+            self.runinResultWidget.set_results(snapshot.get("items", []))
+            self.runinTrayLabel.setText(
+                f"当前卸载托盘：{snapshot.get('tray_id') or '--'}"
+            )
+            self.runinResultStateLabel.setText("数据等待保存确认")
+            self.runinResultStateLabel.setStyleSheet("color: #a15c00;")
+            return
+        self.runinResultWidget.clear_results()
+        self.runinTrayLabel.setText("当前卸载托盘：--")
+        self.runinResultStateLabel.setText("等待跑合设备数据")
+        self.runinResultStateLabel.setStyleSheet("color: #627d98;")
 
     def _update_sn_progress(self) -> None:
         completed = sum(bool(item.text().strip()) for item in self.serial_inputs)
@@ -391,6 +781,19 @@ class MainWindow(QMainWindow):
         self.ui.logOutput.appendPlainText(f"[{timestamp}] {message}")
 
     def closeEvent(self, event: object) -> None:
+        for device_id, worker in list(self.runin_workers.items()):
+            thread = self.runin_threads.get(device_id)
+            if thread is None or not thread.isRunning():
+                continue
+            QMetaObject.invokeMethod(
+                worker,
+                "stop",
+                Qt.ConnectionType.QueuedConnection,
+            )
+        for thread in self.runin_threads.values():
+            if thread.isRunning() and not thread.wait(1500):
+                thread.quit()
+                thread.wait(1000)
         if (
             self.plc_worker is not None
             and self.plc_thread is not None

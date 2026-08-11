@@ -4,5 +4,16 @@
   "upload_path": "/api/test-records",
   "timeout_seconds": 10,
   "retry_count": 3,
-  "retry_interval_seconds": 5
+  "retry_interval_seconds": 5,
+  "traceability": {
+    "database_path": "data/traceability.db",
+    "station_code": "RUNIN_01",
+    "spectrum_peer": {
+      "enabled": true,
+      "base_url": "http://192.168.250.100:8765",
+      "token": "boreasa-line-traceability-v1",
+      "timeout_seconds": 2,
+      "retry_interval_seconds": 15
+    }
+  }
 }
