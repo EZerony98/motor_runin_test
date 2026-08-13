@@ -82,8 +82,12 @@ class RuninResultWidget(QWidget):
             speed = self._display(item.get("runin_speed_rpm"))
             temperature = self._display(item.get("runin_temperature_c"))
             passed_value = item.get("runin_passed")
-            result_text = "OK" if bool(passed_value) else "NG"
-            passed_property = "ok" if bool(passed_value) else "ng"
+            if passed_value is None:
+                result_text = "--"
+                passed_property = "unknown"
+            else:
+                result_text = "OK" if bool(passed_value) else "NG"
+                passed_property = "ok" if bool(passed_value) else "ng"
             self.sn_labels[index].setText(f"SN {slot}: {product_sn}")
             self.value_labels[index].setText(
                 f"I {current}  U {voltage}\n"

@@ -52,6 +52,17 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(snapshot["items"][9]["runin_voltage_v"], 210)
         self.assertFalse(snapshot["items"][9]["runin_passed"])
 
+    def test_live_snapshot_reads_values_without_data_ready_handshake(self) -> None:
+        self.driver.set_simulated_result("7001", sample_rows(), ready=False)
+
+        snapshot = self.driver.read_live_snapshot()
+
+        self.assertEqual(snapshot["tray_id"], "7001")
+        self.assertFalse(snapshot["data_ready"])
+        self.assertEqual(snapshot["items"][0]["runin_current_a"], 101)
+        self.assertEqual(snapshot["items"][9]["runin_speed_rpm"], 17010)
+        self.assertIsNone(snapshot["items"][0]["runin_passed"])
+
     def test_writes_read_complete_to_dm3502_bit_one(self) -> None:
         self.driver.write_read_complete(True)
         self.assertEqual(self.driver.read_words(3502, 1)[0], 0b10)
@@ -90,6 +101,26 @@ class RuninPlcWorkerTests(unittest.TestCase):
         self.worker.poll()
 
         self.assertEqual(self.worker.driver.read_words(3502, 1)[0], 0)
+
+    def test_emits_live_snapshot_before_handshake_is_ready(self) -> None:
+        received = []
+        logs = []
+        self.worker.live_snapshot.connect(
+            lambda device_id, data: received.append((device_id, data))
+        )
+        self.worker.log.connect(logs.append)
+        self.worker.driver.connect()
+        self.worker.driver.set_simulated_result("7001", sample_rows(), ready=False)
+
+        self.worker.poll()
+
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0][0], "RUNIN_01")
+        self.assertFalse(received[0][1]["data_ready"])
+        self.assertEqual(
+            received[0][1]["items"][0]["runin_voltage_v"], 201
+        )
+        self.assertTrue(any("D3502.00=0" in message for message in logs))
 
 
 if __name__ == "__main__":

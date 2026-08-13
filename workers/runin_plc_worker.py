@@ -10,6 +10,7 @@ from drivers.runin_plc import RuninPlcDriver
 
 class RuninPlcWorker(QObject):
     connection_changed = Signal(str, bool, str)
+    live_snapshot = Signal(str, dict)
     result_ready = Signal(str, dict)
     log = Signal(str)
     finished = Signal()
@@ -31,6 +32,9 @@ class RuninPlcWorker(QObject):
         self.ack_sent = False
         self.idle_ack_cleared = False
         self.retry_not_before = 0.0
+        self.last_live_signature = None
+        self.last_live_emit_at = 0.0
+        self.last_ready_state: Optional[bool] = None
 
     @Slot()
     def start(self) -> None:
@@ -50,7 +54,34 @@ class RuninPlcWorker(QObject):
             if not self.driver.is_connected:
                 self.driver.connect()
             self._emit_connection(True, f"{self.device_name} 已连接")
-            ready = self.driver.read_data_ready()
+            live_snapshot = self.driver.read_live_snapshot()
+            signature = (
+                live_snapshot.get("tray_id"),
+                live_snapshot.get("data_ready"),
+                tuple(
+                    tuple(
+                        item.get(field)
+                        for field in self.driver.PRODUCT_FIELDS
+                    )
+                    for item in live_snapshot.get("items", [])
+                ),
+            )
+            now = time.monotonic()
+            if (
+                signature != self.last_live_signature
+                or now - self.last_live_emit_at >= 1.0
+            ):
+                self.last_live_signature = signature
+                self.last_live_emit_at = now
+                self.live_snapshot.emit(self.device_id, live_snapshot)
+            ready = bool(live_snapshot.get("data_ready"))
+            if ready != self.last_ready_state:
+                self.last_ready_state = ready
+                self.log.emit(
+                    f"{self.device_name} 数据可读 D3502.00="
+                    f"{1 if ready else 0}，托盘 "
+                    f"{live_snapshot.get('tray_id') or '--'}"
+                )
             if not ready:
                 if self.ack_sent or not self.idle_ack_cleared:
                     self.driver.write_read_complete(False)
@@ -72,6 +103,9 @@ class RuninPlcWorker(QObject):
                 self.result_ready.emit(self.device_id, snapshot)
         except Exception as error:
             self.driver.disconnect()
+            self.last_live_signature = None
+            self.last_live_emit_at = 0.0
+            self.last_ready_state = None
             self.idle_ack_cleared = False
             self._emit_connection(
                 False, f"{self.device_name} 未连接：{error}"

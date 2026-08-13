@@ -137,6 +137,34 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.assertIn("NG", self.window.runinResultWidget.value_labels[9].text())
         self.assertIn("已保存 10/10", self.window.runinResultStateLabel.text())
 
+    def test_runin_live_snapshot_displays_without_saving(self) -> None:
+        snapshot = {
+            "device_id": "RUNIN_01",
+            "device_name": "跑合设备 1",
+            "tray_id": "7001",
+            "data_ready": False,
+            "handshake_word": 0,
+            "items": [
+                {
+                    "tray_slot": slot,
+                    "runin_current_a": 100 + slot,
+                    "runin_voltage_v": 200 + slot,
+                    "runin_speed_rpm": 17000 + slot,
+                    "runin_temperature_c": 40 + slot,
+                    "runin_passed": None,
+                    "runin_result_code": None,
+                }
+                for slot in range(1, 11)
+            ],
+        }
+
+        self.window._on_runin_live_snapshot("RUNIN_01", snapshot)
+
+        self.assertIn("I 101", self.window.runinResultWidget.value_labels[0].text())
+        self.assertIn("--", self.window.runinResultWidget.value_labels[0].text())
+        self.assertIn("D3502.00/.01：0/0", self.window.runinHandshakeLabel.text())
+        self.assertIn("实时预览中", self.window.runinResultStateLabel.text())
+
     def test_plc_control_buttons_follow_required_bit_behaviour(self) -> None:
         requests = []
         self.window.plc_control_requested.connect(

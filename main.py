@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self.runin_threads: Dict[str, QThread] = {}
         self.runin_workers: Dict[str, RuninPlcWorker] = {}
         self.runin_snapshots: Dict[str, Dict[str, Any]] = {}
+        self.runin_live_snapshots: Dict[str, Dict[str, Any]] = {}
         self.runin_records: Dict[str, List[Dict[str, Any]]] = {}
         self.plc_control_states = {
             "mode_auto": False,
@@ -302,6 +303,12 @@ QTabBar::tab:selected {
         self.runinTrayLabel = QLabel("当前卸载托盘：--", result_tab)
         self.runinTrayLabel.setStyleSheet("font-weight: 700;")
         result_header.addWidget(self.runinTrayLabel)
+        result_header.addSpacing(18)
+        self.runinHandshakeLabel = QLabel(
+            "握手 D3502.00/.01：--/--", result_tab
+        )
+        self.runinHandshakeLabel.setStyleSheet("color: #627d98;")
+        result_header.addWidget(self.runinHandshakeLabel)
         result_header.addStretch(1)
         self.runinResultStateLabel = QLabel("等待跑合设备数据", result_tab)
         self.runinResultStateLabel.setStyleSheet("color: #627d98;")
@@ -372,6 +379,7 @@ QTabBar::tab:selected {
             worker.moveToThread(thread)
             thread.started.connect(worker.start)
             worker.connection_changed.connect(self._set_runin_connection)
+            worker.live_snapshot.connect(self._on_runin_live_snapshot)
             worker.result_ready.connect(self._on_runin_result_ready)
             worker.log.connect(self.append_log)
             worker.finished.connect(thread.quit)
@@ -732,10 +740,71 @@ QTabBar::tab:selected {
         )
         self.runin_result_processed.emit(device_id, True)
 
+    def _on_runin_live_snapshot(
+        self, device_id: str, snapshot: Dict[str, Any]
+    ) -> None:
+        """持续显示 PLC 当前 D1000-D1049，不以握手置位为前提。"""
+        device_id = str(device_id)
+        display_snapshot = dict(snapshot)
+        tray_id = str(display_snapshot.get("tray_id", "")).strip()
+        display_items = [dict(item) for item in snapshot.get("items", [])]
+        if tray_id:
+            for item in display_items:
+                try:
+                    product = self.traceability_service.resolve_product(
+                        tray_id, int(item.get("tray_slot", 0))
+                    )
+                except Exception:
+                    continue
+                item["product_sn"] = product["product_sn"]
+        display_snapshot["items"] = display_items
+        display_snapshot["received_at"] = datetime.now().strftime("%H:%M:%S")
+        self.runin_live_snapshots[device_id] = display_snapshot
+        if str(self.resultDeviceCombo.currentData() or "") == device_id:
+            self._show_runin_live_snapshot(display_snapshot)
+
+    def _show_runin_live_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        tray_id = str(snapshot.get("tray_id", "")).strip()
+        ready = bool(snapshot.get("data_ready", False))
+        handshake_word = int(snapshot.get("handshake_word", 0))
+        completed = bool(handshake_word & (1 << 1))
+        received_at = str(snapshot.get("received_at", "--"))
+        self.runinResultWidget.set_results(snapshot.get("items", []))
+        self.runinTrayLabel.setText(f"当前 PLC 托盘：{tray_id or '--'}")
+        self.runinHandshakeLabel.setText(
+            f"握手 D3502.00/.01：{1 if ready else 0}/"
+            f"{1 if completed else 0} · 更新 {received_at}"
+        )
+        self.runinHandshakeLabel.setStyleSheet(
+            "color: #137333; font-weight: 700;"
+            if ready
+            else "color: #a15c00; font-weight: 600;"
+        )
+        saved_records = self.runin_records.get(
+            str(snapshot.get("device_id", "")), []
+        )
+        saved_tray_id = (
+            str(saved_records[0].get("tray_id", "")) if saved_records else ""
+        )
+        if tray_id and saved_tray_id == tray_id:
+            return
+        if ready:
+            self.runinResultStateLabel.setText("数据可读，正在关联 SN 并保存…")
+            self.runinResultStateLabel.setStyleSheet("color: #137333;")
+        else:
+            self.runinResultStateLabel.setText(
+                "实时预览中，等待 PLC 置 D3502.00=1"
+            )
+            self.runinResultStateLabel.setStyleSheet("color: #a15c00;")
+
     def _display_selected_runin_result(self) -> None:
         device_id = str(self.resultDeviceCombo.currentData() or "")
         records = self.runin_records.get(device_id)
         snapshot = self.runin_snapshots.get(device_id)
+        live_snapshot = self.runin_live_snapshots.get(device_id)
+        if live_snapshot:
+            self._show_runin_live_snapshot(live_snapshot)
+            return
         if records:
             self.runinResultWidget.set_results(records)
             tray_id = str(records[0].get("tray_id", ""))
@@ -758,6 +827,8 @@ QTabBar::tab:selected {
             return
         self.runinResultWidget.clear_results()
         self.runinTrayLabel.setText("当前卸载托盘：--")
+        self.runinHandshakeLabel.setText("握手 D3502.00/.01：--/--")
+        self.runinHandshakeLabel.setStyleSheet("color: #627d98;")
         self.runinResultStateLabel.setText("等待跑合设备数据")
         self.runinResultStateLabel.setStyleSheet("color: #627d98;")
 

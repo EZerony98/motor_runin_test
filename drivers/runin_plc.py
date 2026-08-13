@@ -43,6 +43,20 @@ class RuninPlcDriver(FinsPlcDriver):
         word = self.read_words(self.handshake_address, 1)[0]
         return bool(word & (1 << self.data_ready_bit))
 
+    def read_live_snapshot(self) -> Dict[str, Any]:
+        """不依赖握手位，读取当前托盘号及 D1000-D1049 用于界面预览。"""
+        self._require_connection()
+        handshake_word = self.read_words(self.handshake_address, 1)[0]
+        tray_id = self.read_tray_id()
+        words = self.read_words(self.result_base_address, self.result_word_count)
+        return self._parse_snapshot(
+            tray_id,
+            words,
+            strict_passed=False,
+            data_ready=bool(handshake_word & (1 << self.data_ready_bit)),
+            handshake_word=handshake_word,
+        )
+
     def read_result_snapshot(self) -> Optional[Dict[str, Any]]:
         """读取稳定的一盘10产品结果；PLC在就绪期间必须保持数据不变。"""
         self._require_connection()
@@ -55,6 +69,25 @@ class RuninPlcDriver(FinsPlcDriver):
         if not self.read_data_ready():
             raise FinsProtocolError("读取跑合结果期间数据就绪位被清除")
 
+        return self._parse_snapshot(
+            tray_id,
+            words,
+            strict_passed=True,
+            data_ready=True,
+            handshake_word=1 << self.data_ready_bit,
+        )
+
+    def _parse_snapshot(
+        self,
+        tray_id: str,
+        words: List[int],
+        *,
+        strict_passed: bool,
+        data_ready: bool,
+        handshake_word: int,
+    ) -> Dict[str, Any]:
+        """将50个连续INT字解析为10个产品；预览允许合格位尚未生成。"""
+
         items: List[Dict[str, Any]] = []
         for slot in range(1, self.products_per_tray + 1):
             start = (slot - 1) * self.words_per_product
@@ -63,10 +96,15 @@ class RuninPlcDriver(FinsPlcDriver):
                 for value in words[start : start + self.words_per_product]
             ]
             passed = values[4]
-            if passed not in (0, 1):
+            if strict_passed and passed not in (0, 1):
                 raise FinsProtocolError(
                     f"托盘 {tray_id} 坑位 {slot} 合格值必须为 0 或 1，实际 {passed}"
                 )
+            passed_value = (
+                bool(passed)
+                if passed in (0, 1) and (strict_passed or data_ready)
+                else None
+            )
             items.append(
                 {
                     "tray_slot": slot,
@@ -74,14 +112,18 @@ class RuninPlcDriver(FinsPlcDriver):
                     "runin_voltage_v": values[1],
                     "runin_speed_rpm": values[2],
                     "runin_temperature_c": values[3],
-                    "runin_passed": bool(passed),
-                    "runin_result_code": 0 if passed else 1,
+                    "runin_passed": passed_value,
+                    "runin_result_code": (
+                        0 if passed_value else 1
+                    ) if passed_value is not None else None,
                 }
             )
         return {
             "device_id": self.device_id,
             "device_name": self.device_name,
             "tray_id": tray_id,
+            "data_ready": bool(data_ready),
+            "handshake_word": int(handshake_word) & 0xFFFF,
             "items": items,
         }
 
