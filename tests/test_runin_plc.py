@@ -29,12 +29,12 @@ def runin_simulation_config():
 def sample_rows():
     return [
         [
-            100 + slot,
-            200 + slot,
             17000 + slot,
+            200 + slot,
             40 + slot,
-            slot != 10,
+            100 + slot,
             0 if slot != 10 else 105,
+            slot != 10,
         ]
         for slot in range(1, 11)
     ]
@@ -56,6 +56,9 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(snapshot["tray_id"], "7001")
         self.assertEqual(len(snapshot["items"]), 10)
         self.assertEqual(snapshot["items"][0]["runin_current_a"], 101)
+        self.assertEqual(snapshot["items"][0]["runin_speed_rpm"], 17001)
+        self.assertEqual(snapshot["items"][0]["runin_voltage_v"], 201)
+        self.assertEqual(snapshot["items"][0]["runin_temperature_c"], 41)
         self.assertEqual(snapshot["items"][9]["runin_voltage_v"], 210)
         self.assertFalse(snapshot["items"][9]["runin_passed"])
         self.assertEqual(snapshot["items"][9]["runin_error_code"], 105)

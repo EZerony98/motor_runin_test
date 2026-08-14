@@ -7,12 +7,12 @@ from .plc_fins import FinsPlcDriver, FinsProtocolError
 
 class RuninPlcDriver(FinsPlcDriver):
     PRODUCT_FIELDS = (
-        "runin_current_a",
-        "runin_voltage_v",
         "runin_speed_rpm",
+        "runin_voltage_v",
         "runin_temperature_c",
-        "runin_passed",
+        "runin_current_a",
         "runin_error_code",
+        "runin_passed",
     )
 
     def __init__(self, config: Dict[str, Any]) -> None:
@@ -96,7 +96,7 @@ class RuninPlcDriver(FinsPlcDriver):
                 self.word_to_int16(value)
                 for value in words[start : start + self.words_per_product]
             ]
-            passed = values[4]
+            passed = values[5]
             if strict_passed and passed not in (0, 1):
                 raise FinsProtocolError(
                     f"托盘 {tray_id} 坑位 {slot} 合格值必须为 0 或 1，实际 {passed}"
@@ -109,15 +109,15 @@ class RuninPlcDriver(FinsPlcDriver):
             items.append(
                 {
                     "tray_slot": slot,
-                    "runin_current_a": values[0],
+                    "runin_speed_rpm": values[0],
                     "runin_voltage_v": values[1],
-                    "runin_speed_rpm": values[2],
-                    "runin_temperature_c": values[3],
+                    "runin_temperature_c": values[2],
+                    "runin_current_a": values[3],
+                    "runin_error_code": values[4],
                     "runin_passed": passed_value,
                     "runin_result_code": (
                         0 if passed_value else 1
                     ) if passed_value is not None else None,
-                    "runin_error_code": values[5],
                 }
             )
         return {
