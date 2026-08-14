@@ -22,6 +22,8 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         database_path = Path(self.temporary_directory.name) / "traceability.db"
         self.window = MainWindow(start_plc=False, database_path=database_path)
+        self.window.mapping_sync_timer.stop()
+        self.window.mapping_sync_service.config["enabled"] = False
         self.window.show()
         self.app.processEvents()
 
@@ -36,6 +38,10 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.assertEqual(self.window.serial_numbers()[-1], "C66HNI042674")
 
     def test_submit_saves_tray_mapping_locally(self) -> None:
+        requests = []
+        self.window.plc_control_requested.connect(
+            lambda name, value: requests.append((name, value))
+        )
         self.window.set_tray_id("TRAY-001")
         self.window.serial_inputs[0].setText("C66HNI042665")
         self.window.ui.fillButton.click()
@@ -51,6 +57,7 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.assertEqual(last_product["product_sn"], "C66HNI042674")
         self.assertEqual(self.window.ui.submitButton.text(), "保存上料信息")
         self.assertIn("已保存到本地数据库", self.window.ui.logOutput.toPlainText())
+        self.assertEqual(requests[-1], ("loading_saved", True))
 
     def test_debug_tray_id_can_be_entered_manually_and_saved(self) -> None:
         self.assertFalse(self.window.ui.trayIdEdit.isReadOnly())
@@ -71,9 +78,78 @@ class MainWindowSerialEntryTests(unittest.TestCase):
 
         self.window._on_release_button_pressed()
 
+        self.assertEqual(self.window.ui.trayIdEdit.text(), "7001")
+        self.assertTrue(self.window.release_clear_pending)
+        self.window._on_control_write_succeeded("loading_saved", True)
+
         self.assertEqual(self.window.ui.trayIdEdit.text(), "")
         self.assertEqual(self.window.serial_numbers(), [""] * 10)
         self.assertIn("已放行", self.window.ui.logOutput.toPlainText())
+        product = self.window.traceability_service.resolve_product("7001", 1)
+        self.assertEqual(product["product_sn"], "C66HNI042665")
+        self.assertIn(
+            "放行前自动保存", self.window.ui.logOutput.toPlainText()
+        )
+
+    def test_release_button_keeps_incomplete_unsaved_information(self) -> None:
+        warnings = []
+        self.window._warn = warnings.append
+        self.window.set_tray_id("7002")
+        self.window.serial_inputs[0].setText("C66HNI042665")
+
+        self.window._on_release_button_pressed()
+
+        self.assertEqual(self.window.ui.trayIdEdit.text(), "7002")
+        self.assertEqual(
+            self.window.serial_inputs[0].text(), "C66HNI042665"
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("信息已保留", self.window.ui.testStateLabel.text())
+
+    def test_release_write_failure_keeps_information_and_cancels_clear(self) -> None:
+        self.window._warn = lambda _message: None
+        self.window.set_tray_id("7003")
+        self.window.serial_inputs[0].setText("C66HNI042665")
+        self.window.ui.fillButton.click()
+        self.window._on_release_button_pressed()
+
+        self.window._on_control_write_failed("loading_saved", "timeout")
+
+        self.assertEqual(self.window.ui.trayIdEdit.text(), "7003")
+        self.assertFalse(self.window.release_clear_pending)
+        self.assertIn("信息已保留", self.window.ui.testStateLabel.text())
+
+    def test_release_button_up_cancels_pending_clear_and_permission(self) -> None:
+        requests = []
+        self.window.plc_control_requested.connect(
+            lambda name, value: requests.append((name, value))
+        )
+        self.window.set_tray_id("7004")
+        self.window.serial_inputs[0].setText("C66HNI042665")
+        self.window.ui.fillButton.click()
+        self.window._on_release_button_pressed()
+
+        self.window._on_release_button_released()
+
+        self.assertEqual(self.window.ui.trayIdEdit.text(), "7004")
+        self.assertFalse(self.window.release_clear_pending)
+        self.assertEqual(requests[-1], ("loading_saved", False))
+
+    def test_edit_after_save_revokes_loading_saved_permission(self) -> None:
+        requests = []
+        self.window.plc_control_requested.connect(
+            lambda name, value: requests.append((name, value))
+        )
+        self.window.set_tray_id("7005")
+        self.window.serial_inputs[0].setText("C66HNI042665")
+        self.window.ui.fillButton.click()
+        self.window.ui.submitButton.click()
+        self.window._on_control_write_succeeded("loading_saved", True)
+
+        self.window.serial_inputs[0].setFocus()
+        QTest.keyClick(self.window.serial_inputs[0], Qt.Key.Key_Backspace)
+
+        self.assertEqual(requests[-1], ("loading_saved", False))
 
     def test_tray_layout_uses_two_rows_of_five_inputs(self) -> None:
         self.window.resize(1180, 720)
@@ -121,6 +197,7 @@ class MainWindowSerialEntryTests(unittest.TestCase):
                     "runin_temperature_c": 40 + slot,
                     "runin_passed": slot != 10,
                     "runin_result_code": 0 if slot != 10 else 1,
+                    "runin_error_code": 0 if slot != 10 else 105,
                 }
                 for slot in range(1, 11)
             ],
@@ -153,6 +230,7 @@ class MainWindowSerialEntryTests(unittest.TestCase):
                     "runin_temperature_c": 40 + slot,
                     "runin_passed": None,
                     "runin_result_code": None,
+                    "runin_error_code": 0,
                 }
                 for slot in range(1, 11)
             ],
@@ -164,6 +242,26 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.assertIn("--", self.window.runinResultWidget.value_labels[0].text())
         self.assertIn("D3502.00/.01：0/0", self.window.runinHandshakeLabel.text())
         self.assertIn("实时预览中", self.window.runinResultStateLabel.text())
+
+    def test_runin_address_label_follows_device_configuration(self) -> None:
+        self.window.runin_plc_configs[0]["mapping"].update(
+            {
+                "result_base_address": 2000,
+                "words_per_product": 6,
+                "handshake_address": 3002,
+                "data_ready_bit": 3,
+                "read_complete_bit": 4,
+            }
+        )
+
+        self.window._update_runin_address_label()
+
+        self.assertIn(
+            "D3002.03/.04", self.window.runinHandshakeLabel.text()
+        )
+        self.assertIn(
+            "D2000–D2059", self.window.runinHandshakeLabel.toolTip()
+        )
 
     def test_plc_control_buttons_follow_required_bit_behaviour(self) -> None:
         requests = []

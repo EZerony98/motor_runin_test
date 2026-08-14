@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,6 +37,29 @@ class TraceabilityServiceTests(unittest.TestCase):
 
         self.assertEqual(first["tray_cycle_id"], second["tray_cycle_id"])
 
+    def test_existing_database_is_upgraded_with_error_code_column(self) -> None:
+        legacy_path = Path(self.temporary_directory.name) / "legacy.db"
+        with sqlite3.connect(str(legacy_path)) as connection:
+            connection.execute(
+                """
+                CREATE TABLE runin_results (
+                    record_id TEXT PRIMARY KEY,
+                    runin_result_code TEXT
+                )
+                """
+            )
+
+        TraceabilityService(legacy_path)
+
+        with sqlite3.connect(str(legacy_path)) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(runin_results)"
+                )
+            }
+        self.assertIn("runin_error_code", columns)
+
     def test_runin_result_uses_product_sn_from_mapping(self) -> None:
         serial_numbers = [f"SN{index:02d}" for index in range(1, 11)]
         self.service.save_tray_batch("7001", serial_numbers)
@@ -51,6 +75,7 @@ class TraceabilityServiceTests(unittest.TestCase):
                 "runin_temperature_c": 43.9,
                 "runin_passed": True,
                 "runin_result_code": "OK",
+                "runin_error_code": 0,
             },
         )
 
@@ -74,6 +99,7 @@ class TraceabilityServiceTests(unittest.TestCase):
                 "runin_temperature_c": 40 + slot,
                 "runin_passed": slot != 5,
                 "runin_result_code": 0 if slot != 5 else 1,
+                "runin_error_code": 0 if slot != 5 else 105,
             }
             for slot in range(1, 11)
         ]
@@ -86,6 +112,7 @@ class TraceabilityServiceTests(unittest.TestCase):
         self.assertEqual(records[0]["product_sn"], "SN01")
         self.assertEqual(records[-1]["product_sn"], "SN10")
         self.assertFalse(records[4]["runin_passed"])
+        self.assertEqual(records[4]["runin_error_code"], 105)
         runin_uploads = [
             item
             for item in self.service.pending_uploads(limit=20)

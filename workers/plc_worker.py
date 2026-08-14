@@ -11,6 +11,7 @@ class PlcWorker(QObject):
     connection_changed = Signal(bool, str)
     tray_id_changed = Signal(str)
     release_button_pressed = Signal()
+    release_button_released = Signal()
     control_states_changed = Signal(dict)
     control_write_succeeded = Signal(str, bool)
     control_write_failed = Signal(str, str)
@@ -43,8 +44,10 @@ class PlcWorker(QObject):
     @Slot()
     def poll(self) -> None:
         try:
-            if not self.driver.is_connected:
+            newly_connected = not self.driver.is_connected
+            if newly_connected:
                 self.driver.connect()
+                self.driver.write_control("loading_saved", False)
             tray_id = self.driver.read_tray_id()
             control_states = self.driver.read_control_states()
             release_button_state = control_states.pop("release_button")
@@ -57,6 +60,11 @@ class PlcWorker(QObject):
                 and release_button_state is True
             ):
                 self.release_button_pressed.emit()
+            elif (
+                self.last_release_button_state is True
+                and release_button_state is False
+            ):
+                self.release_button_released.emit()
             self.last_release_button_state = release_button_state
             if control_states != self.last_control_states:
                 self.last_control_states = dict(control_states)
@@ -88,7 +96,7 @@ class PlcWorker(QObject):
             self.timer.deleteLater()
             self.timer = None
         if self.driver.is_connected:
-            for name in ("reset", "start"):
+            for name in ("reset", "start", "loading_saved"):
                 try:
                     self.driver.write_control(name, False)
                 except Exception:

@@ -12,6 +12,7 @@ class RuninPlcDriver(FinsPlcDriver):
         "runin_speed_rpm",
         "runin_temperature_c",
         "runin_passed",
+        "runin_error_code",
     )
 
     def __init__(self, config: Dict[str, Any]) -> None:
@@ -21,12 +22,12 @@ class RuninPlcDriver(FinsPlcDriver):
         mapping = config.get("mapping", {})
         self.result_base_address = int(mapping.get("result_base_address", 1000))
         self.products_per_tray = int(mapping.get("products_per_tray", 10))
-        self.words_per_product = int(mapping.get("words_per_product", 5))
+        self.words_per_product = int(mapping.get("words_per_product", 6))
         self.handshake_address = int(mapping.get("handshake_address", 3502))
         self.data_ready_bit = int(mapping.get("data_ready_bit", 0))
         self.read_complete_bit = int(mapping.get("read_complete_bit", 1))
-        if self.products_per_tray != 10 or self.words_per_product != 5:
-            raise ValueError("跑合结果当前必须按 10 个产品、每产品 5 个 INT 配置")
+        if self.products_per_tray != 10 or self.words_per_product != 6:
+            raise ValueError("跑合结果当前必须按 10 个产品、每产品 6 个 INT 配置")
         if self.data_ready_bit == self.read_complete_bit:
             raise ValueError("数据就绪位和读取完成位不能相同")
 
@@ -44,7 +45,7 @@ class RuninPlcDriver(FinsPlcDriver):
         return bool(word & (1 << self.data_ready_bit))
 
     def read_live_snapshot(self) -> Dict[str, Any]:
-        """不依赖握手位，读取当前托盘号及 D1000-D1049 用于界面预览。"""
+        """不依赖握手位，读取当前托盘号及 D1000-D1059 用于界面预览。"""
         self._require_connection()
         handshake_word = self.read_words(self.handshake_address, 1)[0]
         tray_id = self.read_tray_id()
@@ -86,7 +87,7 @@ class RuninPlcDriver(FinsPlcDriver):
         data_ready: bool,
         handshake_word: int,
     ) -> Dict[str, Any]:
-        """将50个连续INT字解析为10个产品；预览允许合格位尚未生成。"""
+        """将60个连续INT字解析为10个产品；预览允许合格位尚未生成。"""
 
         items: List[Dict[str, Any]] = []
         for slot in range(1, self.products_per_tray + 1):
@@ -116,12 +117,21 @@ class RuninPlcDriver(FinsPlcDriver):
                     "runin_result_code": (
                         0 if passed_value else 1
                     ) if passed_value is not None else None,
+                    "runin_error_code": values[5],
                 }
             )
         return {
             "device_id": self.device_id,
             "device_name": self.device_name,
             "tray_id": tray_id,
+            "tray_id_address": self.tray_id_address,
+            "result_base_address": self.result_base_address,
+            "result_end_address": (
+                self.result_base_address + self.result_word_count - 1
+            ),
+            "handshake_address": self.handshake_address,
+            "data_ready_bit": self.data_ready_bit,
+            "read_complete_bit": self.read_complete_bit,
             "data_ready": bool(data_ready),
             "handshake_word": int(handshake_word) & 0xFFFF,
             "items": items,
@@ -149,7 +159,7 @@ class RuninPlcDriver(FinsPlcDriver):
         words: List[int] = []
         for row in normalized:
             if len(row) != self.words_per_product:
-                raise ValueError("每个仿真产品必须包含 5 个 INT")
+                raise ValueError("每个仿真产品必须包含 6 个 INT")
             words.extend(int(value) for value in row)
         self.set_simulated_tray_id(tray_id)
         self.write_words(self.result_base_address, words)

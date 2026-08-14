@@ -18,6 +18,7 @@
       "reset_button_bit": 2,
       "start_button_bit": 3,
       "emergency_stop_bit": 4,
+      "loading_saved_bit": 5,
       "tray_id_address": 3008,
       "tray_id_words": 1,
       "tray_id_type": "int16"
@@ -44,7 +45,7 @@
         "tray_id_type": "int16",
         "result_base_address": 1000,
         "products_per_tray": 10,
-        "words_per_product": 5,
+        "words_per_product": 6,
         "handshake_address": 3502,
         "data_ready_bit": 0,
         "read_complete_bit": 1
@@ -70,7 +71,7 @@
         "tray_id_type": "int16",
         "result_base_address": 1000,
         "products_per_tray": 10,
-        "words_per_product": 5,
+        "words_per_product": 6,
         "handshake_address": 3502,
         "data_ready_bit": 0,
         "read_complete_bit": 1
@@ -96,7 +97,7 @@
         "tray_id_type": "int16",
         "result_base_address": 1000,
         "products_per_tray": 10,
-        "words_per_product": 5,
+        "words_per_product": 6,
         "handshake_address": 3502,
         "data_ready_bit": 0,
         "read_complete_bit": 1
@@ -122,7 +123,7 @@
         "tray_id_type": "int16",
         "result_base_address": 1000,
         "products_per_tray": 10,
-        "words_per_product": 5,
+        "words_per_product": 6,
         "handshake_address": 3502,
         "data_ready_bit": 0,
         "read_complete_bit": 1

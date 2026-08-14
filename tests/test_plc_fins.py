@@ -15,6 +15,7 @@ def simulation_config():
             "reset_button_bit": 2,
             "start_button_bit": 3,
             "emergency_stop_bit": 4,
+            "loading_saved_bit": 5,
             "tray_id_address": 3008,
             "tray_id_words": 1,
             "tray_id_type": "int16",
@@ -40,6 +41,7 @@ class FinsPlcDriverTests(unittest.TestCase):
                 "reset": 2,
                 "start": 3,
                 "emergency_stop_ok": 4,
+                "loading_saved": 5,
             },
         )
         self.assertEqual(self.driver.tray_id_address, 3008)
@@ -67,6 +69,7 @@ class FinsPlcDriverTests(unittest.TestCase):
         self.driver.write_control("reset", True)
         self.driver.write_control("start", False)
         self.driver.write_control("emergency_stop_ok", True)
+        self.driver.write_control("loading_saved", True)
 
         states = self.driver.read_control_states()
         self.assertEqual(
@@ -76,10 +79,18 @@ class FinsPlcDriverTests(unittest.TestCase):
                 "reset": True,
                 "start": False,
                 "emergency_stop_ok": True,
+                "loading_saved": True,
                 "release_button": True,
             },
         )
-        self.assertEqual(self.driver.read_words(3000, 1), [0b10111])
+        self.assertEqual(self.driver.read_words(3000, 1), [0b110111])
+
+    def test_loading_saved_permission_uses_d3000_bit_five(self) -> None:
+        self.driver.write_control("loading_saved", True)
+        self.assertEqual(self.driver.read_words(3000, 1), [1 << 5])
+
+        self.driver.write_control("loading_saved", False)
+        self.assertEqual(self.driver.read_words(3000, 1), [0])
 
     def test_real_control_write_uses_fins_dm_bit_command(self) -> None:
         config = simulation_config()

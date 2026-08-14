@@ -18,7 +18,7 @@ def runin_simulation_config():
             "tray_id_type": "int16",
             "result_base_address": 1000,
             "products_per_tray": 10,
-            "words_per_product": 5,
+            "words_per_product": 6,
             "handshake_address": 3502,
             "data_ready_bit": 0,
             "read_complete_bit": 1,
@@ -28,7 +28,14 @@ def runin_simulation_config():
 
 def sample_rows():
     return [
-        [100 + slot, 200 + slot, 17000 + slot, 40 + slot, slot != 10]
+        [
+            100 + slot,
+            200 + slot,
+            17000 + slot,
+            40 + slot,
+            slot != 10,
+            0 if slot != 10 else 105,
+        ]
         for slot in range(1, 11)
     ]
 
@@ -41,7 +48,7 @@ class RuninPlcDriverTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.driver.disconnect()
 
-    def test_reads_dm1000_to_1049_as_ten_interleaved_results(self) -> None:
+    def test_reads_dm1000_to_1059_as_ten_interleaved_results(self) -> None:
         self.driver.set_simulated_result("7001", sample_rows())
 
         snapshot = self.driver.read_result_snapshot()
@@ -51,6 +58,10 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(snapshot["items"][0]["runin_current_a"], 101)
         self.assertEqual(snapshot["items"][9]["runin_voltage_v"], 210)
         self.assertFalse(snapshot["items"][9]["runin_passed"])
+        self.assertEqual(snapshot["items"][9]["runin_error_code"], 105)
+        self.assertEqual(snapshot["result_base_address"], 1000)
+        self.assertEqual(snapshot["result_end_address"], 1059)
+        self.assertEqual(snapshot["handshake_address"], 3502)
 
     def test_live_snapshot_reads_values_without_data_ready_handshake(self) -> None:
         self.driver.set_simulated_result("7001", sample_rows(), ready=False)

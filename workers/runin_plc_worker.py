@@ -78,7 +78,9 @@ class RuninPlcWorker(QObject):
             if ready != self.last_ready_state:
                 self.last_ready_state = ready
                 self.log.emit(
-                    f"{self.device_name} 数据可读 D3502.00="
+                    f"{self.device_name} 数据可读 "
+                    f"D{self.driver.handshake_address}."
+                    f"{self.driver.data_ready_bit:02d}="
                     f"{1 if ready else 0}，托盘 "
                     f"{live_snapshot.get('tray_id') or '--'}"
                 )

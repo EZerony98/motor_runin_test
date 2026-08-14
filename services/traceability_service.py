@@ -77,6 +77,7 @@ class TraceabilityService:
                     runin_temperature_c REAL,
                     runin_passed INTEGER,
                     runin_result_code TEXT,
+                    runin_error_code INTEGER,
                     runin_tested_at TEXT NOT NULL,
                     upload_status TEXT NOT NULL DEFAULT 'pending',
                     server_received_at TEXT,
@@ -99,6 +100,32 @@ class TraceabilityService:
                     UNIQUE (entity_type, entity_id)
                 );
                 """
+            )
+            self._ensure_column(
+                connection,
+                "runin_results",
+                "runin_error_code",
+                "INTEGER",
+            )
+
+    @staticmethod
+    def _ensure_column(
+        connection: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        column_type: str,
+    ) -> None:
+        """为已有生产数据库补充新列，不要求删除或重建数据库。"""
+        columns = {
+            str(row["name"])
+            for row in connection.execute(
+                f"PRAGMA table_info({table_name})"
+            ).fetchall()
+        }
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE {table_name} "
+                f"ADD COLUMN {column_name} {column_type}"
             )
 
     def save_tray_batch(
@@ -417,6 +444,7 @@ class TraceabilityService:
             "runin_temperature_c": measurements.get("runin_temperature_c"),
             "runin_passed": measurements.get("runin_passed"),
             "runin_result_code": measurements.get("runin_result_code"),
+            "runin_error_code": measurements.get("runin_error_code"),
             "runin_tested_at": tested_at,
         }
 
@@ -430,8 +458,8 @@ class TraceabilityService:
                 record_id, tray_cycle_id, tray_id, tray_slot, product_sn,
                 station_code, runin_voltage_v, runin_current_a,
                 runin_speed_rpm, runin_temperature_c, runin_passed,
-                runin_result_code, runin_tested_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                runin_result_code, runin_error_code, runin_tested_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(tray_cycle_id, tray_slot) DO UPDATE SET
                 record_id = excluded.record_id,
                 station_code = excluded.station_code,
@@ -441,6 +469,7 @@ class TraceabilityService:
                 runin_temperature_c = excluded.runin_temperature_c,
                 runin_passed = excluded.runin_passed,
                 runin_result_code = excluded.runin_result_code,
+                runin_error_code = excluded.runin_error_code,
                 runin_tested_at = excluded.runin_tested_at,
                 upload_status = 'pending',
                 server_received_at = NULL
@@ -454,7 +483,8 @@ class TraceabilityService:
                 None
                 if record["runin_passed"] is None
                 else int(bool(record["runin_passed"])),
-                record["runin_result_code"], record["runin_tested_at"],
+                record["runin_result_code"], record["runin_error_code"],
+                record["runin_tested_at"],
             ),
         )
         connection.execute(

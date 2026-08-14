@@ -13,7 +13,11 @@ class PlcWorkerTests(unittest.TestCase):
 
     def test_release_button_emits_only_on_rising_edge(self) -> None:
         presses = []
+        releases = []
         self.worker.release_button_pressed.connect(lambda: presses.append(True))
+        self.worker.release_button_released.connect(
+            lambda: releases.append(True)
+        )
 
         self.worker.poll()
         self.worker.driver.set_simulated_release_button(True)
@@ -25,6 +29,18 @@ class PlcWorkerTests(unittest.TestCase):
         self.worker.poll()
 
         self.assertEqual(presses, [True, True])
+        self.assertEqual(releases, [True])
+
+    def test_connect_resets_stale_loading_saved_permission(self) -> None:
+        self.worker.driver.connect()
+        self.worker.driver.write_control("loading_saved", True)
+        self.worker.driver.disconnect()
+
+        self.worker.poll()
+
+        self.assertFalse(
+            self.worker.driver.read_control_states()["loading_saved"]
+        )
 
     def test_control_write_and_poll_emit_current_states(self) -> None:
         writes = []

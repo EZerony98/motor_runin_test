@@ -82,7 +82,11 @@ class MainWindow(QMainWindow):
             "reset": False,
             "start": False,
             "emergency_stop_ok": False,
+            "loading_saved": False,
         }
+        self.release_clear_pending = False
+        self.pending_release_tray_id = ""
+        self.loading_saved_requested = False
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self._configure_runin_workspace()
@@ -165,6 +169,12 @@ class MainWindow(QMainWindow):
             serial_input.textEdited.connect(
                 partial(self._on_sn_text_edited, index)
             )
+            serial_input.textEdited.connect(
+                self._invalidate_loading_saved_permission
+            )
+        self.ui.trayIdEdit.textEdited.connect(
+            self._invalidate_loading_saved_permission
+        )
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         """兼容扫码枪发送的 Return、Enter、CR、LF 和未知控制键。"""
@@ -304,9 +314,7 @@ QTabBar::tab:selected {
         self.runinTrayLabel.setStyleSheet("font-weight: 700;")
         result_header.addWidget(self.runinTrayLabel)
         result_header.addSpacing(18)
-        self.runinHandshakeLabel = QLabel(
-            "握手 D3502.00/.01：--/--", result_tab
-        )
+        self.runinHandshakeLabel = QLabel("握手地址：--/--", result_tab)
         self.runinHandshakeLabel.setStyleSheet("color: #627d98;")
         result_header.addWidget(self.runinHandshakeLabel)
         result_header.addStretch(1)
@@ -320,7 +328,67 @@ QTabBar::tab:selected {
         self.resultDeviceCombo.currentIndexChanged.connect(
             self._display_selected_runin_result
         )
+        self._update_runin_address_label()
         self.ui.testPanelLayout.addWidget(self.workspaceTabs)
+
+    def _runin_mapping(self, device_id: str) -> Dict[str, Any]:
+        config = next(
+            (
+                item
+                for item in self.runin_plc_configs
+                if str(item.get("id")) == str(device_id)
+            ),
+            {},
+        )
+        return dict(config.get("mapping", {}))
+
+    def _runin_addresses(
+        self,
+        device_id: str,
+        snapshot: Optional[Dict[str, Any]] = None,
+    ) -> tuple[int, int, int, int, int]:
+        mapping = self._runin_mapping(device_id)
+        snapshot = snapshot or {}
+        result_base = int(
+            snapshot.get(
+                "result_base_address",
+                mapping.get("result_base_address", 1000),
+            )
+        )
+        product_count = int(mapping.get("products_per_tray", 10))
+        words_per_product = int(mapping.get("words_per_product", 6))
+        result_end = int(
+            snapshot.get(
+                "result_end_address",
+                result_base + product_count * words_per_product - 1,
+            )
+        )
+        handshake = int(
+            snapshot.get(
+                "handshake_address", mapping.get("handshake_address", 3502)
+            )
+        )
+        ready_bit = int(
+            snapshot.get("data_ready_bit", mapping.get("data_ready_bit", 0))
+        )
+        complete_bit = int(
+            snapshot.get(
+                "read_complete_bit", mapping.get("read_complete_bit", 1)
+            )
+        )
+        return result_base, result_end, handshake, ready_bit, complete_bit
+
+    def _update_runin_address_label(self) -> None:
+        device_id = str(self.resultDeviceCombo.currentData() or "")
+        result_base, result_end, handshake, ready_bit, complete_bit = (
+            self._runin_addresses(device_id)
+        )
+        self.runinHandshakeLabel.setText(
+            f"握手 D{handshake}.{ready_bit:02d}/.{complete_bit:02d}：--/--"
+        )
+        self.runinHandshakeLabel.setToolTip(
+            f"实时结果地址：D{result_base}–D{result_end}"
+        )
 
     def _configure_branding(self) -> None:
         logo = QPixmap(str(PROJECT_DIR / "assets" / "logo.png"))
@@ -350,6 +418,9 @@ QTabBar::tab:selected {
         self.plc_worker.tray_id_changed.connect(self.set_tray_id)
         self.plc_worker.release_button_pressed.connect(
             self._on_release_button_pressed
+        )
+        self.plc_worker.release_button_released.connect(
+            self._on_release_button_released
         )
         self.plc_worker.control_states_changed.connect(
             self._update_plc_control_states
@@ -507,7 +578,15 @@ QTabBar::tab:selected {
 
     def _on_control_write_succeeded(self, name: str, value: bool) -> None:
         self.plc_control_states[name] = value
+        if name == "loading_saved":
+            self.loading_saved_requested = value
         self._update_plc_control_states(self.plc_control_states)
+        if name == "loading_saved":
+            self.append_log(
+                f"上料信息保存完成许可 D3000.05 已写入 {1 if value else 0}。"
+            )
+            if value and self.release_clear_pending:
+                self._finalize_release_clear()
 
     def _on_control_write_failed(self, name: str, message: str) -> None:
         labels = {
@@ -515,15 +594,31 @@ QTabBar::tab:selected {
             "reset": "复位",
             "start": "启动",
             "emergency_stop_ok": "急停",
+            "loading_saved": "上料信息保存完成许可 D3000.05",
         }
         label = labels.get(name, name)
         self.append_log(f"PLC {label}命令写入失败：{message}")
-        QMessageBox.warning(self, "PLC 控制失败", f"{label}命令失败：{message}")
+        if name == "loading_saved":
+            if self.release_clear_pending:
+                self.release_clear_pending = False
+                self.pending_release_tray_id = ""
+            if self.loading_saved_requested:
+                self.ui.testStateLabel.setText(
+                    "当前状态：本地已保存，PLC放行许可写入失败，信息已保留"
+                )
+            else:
+                self.ui.testStateLabel.setText(
+                    "当前状态：PLC放行许可撤销失败，请勿放行并检查连接"
+                )
+        self._warn(f"PLC {label}命令失败：{message}")
 
     def set_tray_id(self, tray_id: str) -> None:
         """由 PLC 通信层在读取到 RFID 托盘编号后调用。"""
         tray_id = str(tray_id or "").strip()
+        previous_tray_id = self.ui.trayIdEdit.text().strip()
         self.ui.trayIdEdit.setText(tray_id)
+        if tray_id != previous_tray_id:
+            self._invalidate_loading_saved_permission()
         if tray_id:
             self.append_log(f"PLC 已读取托盘编号：{tray_id}")
             self.serial_inputs[0].setFocus()
@@ -577,6 +672,7 @@ QTabBar::tab:selected {
 
         for serial_input, serial_number in zip(self.serial_inputs, serial_numbers):
             serial_input.setText(serial_number)
+        self._invalidate_loading_saved_permission()
         self.ui.submitButton.setFocus()
         self.append_log(
             f"已从 {serial_numbers[0]} 顺序补齐至 {serial_numbers[-1]}。"
@@ -585,12 +681,45 @@ QTabBar::tab:selected {
     def _clear_serial_numbers(self) -> None:
         for serial_input in self.serial_inputs:
             serial_input.clear()
+        self._invalidate_loading_saved_permission()
         self.serial_inputs[0].setFocus()
         self.append_log("已清空当前托盘的 10 个 SN。")
 
     def _on_release_button_pressed(self) -> None:
-        """PLC 实体放行按钮上升沿到达后清空本次上料信息。"""
+        """放行前强制落库；保存失败时保留界面数据，避免追溯信息丢失。"""
         released_tray_id = self.ui.trayIdEdit.text().strip()
+        serial_numbers = self.serial_numbers()
+        if not released_tray_id and not any(serial_numbers):
+            self.append_log("检测到 PLC 实体放行按钮，当前没有待保存上料信息。")
+            return
+        if not self._save_loading_information(automatic=True):
+            self.ui.testStateLabel.setText("当前状态：放行后自动保存失败，信息已保留")
+            message = (
+                "检测到 PLC 实体放行按钮，但托盘号或10个SN不完整，"
+                "或本地数据库保存失败。界面信息没有清空，请立即检查并补充保存。"
+            )
+            self.append_log("警告：" + message)
+            self._warn(message)
+            return
+
+        self.release_clear_pending = True
+        self.pending_release_tray_id = released_tray_id
+        if self.plc_control_states.get("loading_saved", False):
+            self._finalize_release_clear()
+        else:
+            self.ui.testStateLabel.setText(
+                "当前状态：本地已保存，等待 PLC 放行许可 D3000.05 写入确认"
+            )
+            self.append_log(
+                f"托盘 {released_tray_id} 已自动保存，等待 D3000.05=1 后清空界面。"
+            )
+
+    def _finalize_release_clear(self) -> None:
+        """PLC已确认收到放行许可后，再清空当前上料界面。"""
+        released_tray_id = self.pending_release_tray_id
+        self.release_clear_pending = False
+        self.pending_release_tray_id = ""
+
         self.ui.trayIdEdit.clear()
         for serial_input in self.serial_inputs:
             serial_input.clear()
@@ -599,16 +728,51 @@ QTabBar::tab:selected {
         if released_tray_id:
             self.append_log(
                 f"检测到 PLC 实体放行按钮，托盘 {released_tray_id} 已放行，"
-                "录入信息已清空。"
+                "上料信息已确认保存并清空界面。"
             )
         else:
             self.append_log("检测到 PLC 实体放行按钮，录入信息已清空。")
 
+    def _on_release_button_released(self) -> None:
+        """实体按钮松开后撤销本次放行许可，防止下一盘沿用。"""
+        if self.release_clear_pending:
+            self.release_clear_pending = False
+            self.pending_release_tray_id = ""
+            self.ui.testStateLabel.setText(
+                "当前状态：上料信息已保存，请重新按下实体放行按钮"
+            )
+            self.append_log(
+                "实体放行按钮已松开，取消本次待清空状态，界面信息继续保留。"
+            )
+        self.loading_saved_requested = False
+        self.plc_control_states["loading_saved"] = False
+        self.plc_control_requested.emit("loading_saved", False)
+
+    def _invalidate_loading_saved_permission(self, *_args: object) -> None:
+        """托盘或SN发生变化后立即撤销旧批次的PLC放行许可。"""
+        self.release_clear_pending = False
+        self.pending_release_tray_id = ""
+        permission_was_active = (
+            self.loading_saved_requested
+            or self.plc_control_states.get("loading_saved", False)
+        )
+        self.loading_saved_requested = False
+        self.plc_control_states["loading_saved"] = False
+        if permission_was_active:
+            self.plc_control_requested.emit("loading_saved", False)
+
     def _submit_serial_numbers(self) -> None:
+        self._save_loading_information(automatic=False)
+
+    def _save_loading_information(self, automatic: bool = False) -> bool:
+        """保存托盘与SN映射；供手动保存和放行前保险保存共同使用。"""
         tray_id = self.ui.trayIdEdit.text().strip()
         if not tray_id:
-            self._warn("请输入托盘编号，或等待 PLC 读取 RFID 后再保存上料信息。")
-            return
+            if not automatic:
+                self._warn(
+                    "请输入托盘编号，或等待 PLC 读取 RFID 后再保存上料信息。"
+                )
+            return False
 
         try:
             serial_numbers = self.serial_number_service.validate_batch(
@@ -625,23 +789,29 @@ QTabBar::tab:selected {
                     + "、".join(too_long_positions)
                 )
         except SerialNumberError as error:
-            self._warn(str(error))
-            return
+            if not automatic:
+                self._warn(str(error))
+            return False
 
         try:
             batch = self.traceability_service.save_tray_batch(
                 tray_id, serial_numbers
             )
         except Exception as error:
-            self._warn(f"上料信息本地保存失败：{error}")
-            return
+            if not automatic:
+                self._warn(f"上料信息本地保存失败：{error}")
+            return False
 
         self.ui.testStateLabel.setText("当前状态：上料信息已保存")
         self.append_log(
             f"托盘 {tray_id} 的 10 个坑位与 SN 已保存到本地数据库，"
             f"批次 {batch['tray_cycle_id']}。"
+            + ("（放行前自动保存）" if automatic else "")
         )
+        self.loading_saved_requested = True
+        self.plc_control_requested.emit("loading_saved", True)
         self._sync_pending_tray_mappings()
+        return True
 
     def _sync_pending_tray_mappings(self) -> None:
         if not self.mapping_sync_service.enabled:
@@ -743,7 +913,7 @@ QTabBar::tab:selected {
     def _on_runin_live_snapshot(
         self, device_id: str, snapshot: Dict[str, Any]
     ) -> None:
-        """持续显示 PLC 当前 D1000-D1049，不以握手置位为前提。"""
+        """持续显示 PLC 当前 D1000-D1059，不以握手置位为前提。"""
         device_id = str(device_id)
         display_snapshot = dict(snapshot)
         tray_id = str(display_snapshot.get("tray_id", "")).strip()
@@ -764,16 +934,24 @@ QTabBar::tab:selected {
             self._show_runin_live_snapshot(display_snapshot)
 
     def _show_runin_live_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        device_id = str(snapshot.get("device_id", ""))
+        result_base, result_end, handshake, ready_bit, complete_bit = (
+            self._runin_addresses(device_id, snapshot)
+        )
         tray_id = str(snapshot.get("tray_id", "")).strip()
         ready = bool(snapshot.get("data_ready", False))
         handshake_word = int(snapshot.get("handshake_word", 0))
-        completed = bool(handshake_word & (1 << 1))
+        completed = bool(handshake_word & (1 << complete_bit))
         received_at = str(snapshot.get("received_at", "--"))
         self.runinResultWidget.set_results(snapshot.get("items", []))
         self.runinTrayLabel.setText(f"当前 PLC 托盘：{tray_id or '--'}")
         self.runinHandshakeLabel.setText(
-            f"握手 D3502.00/.01：{1 if ready else 0}/"
+            f"握手 D{handshake}.{ready_bit:02d}/.{complete_bit:02d}："
+            f"{1 if ready else 0}/"
             f"{1 if completed else 0} · 更新 {received_at}"
+        )
+        self.runinHandshakeLabel.setToolTip(
+            f"实时结果地址：D{result_base}–D{result_end}"
         )
         self.runinHandshakeLabel.setStyleSheet(
             "color: #137333; font-weight: 700;"
@@ -793,12 +971,14 @@ QTabBar::tab:selected {
             self.runinResultStateLabel.setStyleSheet("color: #137333;")
         else:
             self.runinResultStateLabel.setText(
-                "实时预览中，等待 PLC 置 D3502.00=1"
+                f"实时预览中，等待 PLC 置 "
+                f"D{handshake}.{ready_bit:02d}=1"
             )
             self.runinResultStateLabel.setStyleSheet("color: #a15c00;")
 
     def _display_selected_runin_result(self) -> None:
         device_id = str(self.resultDeviceCombo.currentData() or "")
+        self._update_runin_address_label()
         records = self.runin_records.get(device_id)
         snapshot = self.runin_snapshots.get(device_id)
         live_snapshot = self.runin_live_snapshots.get(device_id)
@@ -827,7 +1007,7 @@ QTabBar::tab:selected {
             return
         self.runinResultWidget.clear_results()
         self.runinTrayLabel.setText("当前卸载托盘：--")
-        self.runinHandshakeLabel.setText("握手 D3502.00/.01：--/--")
+        self._update_runin_address_label()
         self.runinHandshakeLabel.setStyleSheet("color: #627d98;")
         self.runinResultStateLabel.setText("等待跑合设备数据")
         self.runinResultStateLabel.setStyleSheet("color: #627d98;")

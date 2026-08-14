@@ -37,6 +37,7 @@ class FinsPlcDriver(BaseDevice):
             "reset": int(mapping.get("reset_button_bit", 2)),
             "start": int(mapping.get("start_button_bit", 3)),
             "emergency_stop_ok": int(mapping.get("emergency_stop_bit", 4)),
+            "loading_saved": int(mapping.get("loading_saved_bit", 5)),
         }
         self.tray_id_address = int(mapping.get("tray_id_address", 3008))
         self.tray_id_words = int(mapping.get("tray_id_words", 1))
