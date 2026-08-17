@@ -136,6 +136,24 @@ class RuninPlcWorkerTests(unittest.TestCase):
         )
         self.assertTrue(any("D3502.00=0" in message for message in logs))
 
+    def test_poll_failure_is_written_to_runtime_log(self) -> None:
+        logs = []
+        self.worker.log.connect(logs.append)
+        self.worker.driver.connect()
+
+        def fail_read():
+            raise TimeoutError("timed out")
+
+        self.worker.driver.read_live_snapshot = fail_read
+        self.worker.poll()
+
+        self.assertTrue(
+            any(
+                "跑合设备 1 读取失败：timed out" in message
+                for message in logs
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

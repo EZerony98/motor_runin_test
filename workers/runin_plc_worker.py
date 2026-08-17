@@ -35,6 +35,8 @@ class RuninPlcWorker(QObject):
         self.last_live_signature = None
         self.last_live_emit_at = 0.0
         self.last_ready_state: Optional[bool] = None
+        self.last_error_message = ""
+        self.last_error_log_at = 0.0
 
     @Slot()
     def start(self) -> None:
@@ -109,8 +111,8 @@ class RuninPlcWorker(QObject):
             self.last_live_emit_at = 0.0
             self.last_ready_state = None
             self.idle_ack_cleared = False
-            self._emit_connection(
-                False, f"{self.device_name} 未连接：{error}"
+            self._report_failure(
+                f"{self.device_name} 读取失败：{error}"
             )
 
     @Slot(str, bool)
@@ -134,8 +136,8 @@ class RuninPlcWorker(QObject):
             self.driver.disconnect()
             self.processing_pending = False
             self.retry_not_before = time.monotonic() + self.retry_interval_seconds
-            self._emit_connection(
-                False, f"{self.device_name} 确认写入失败：{error}"
+            self._report_failure(
+                f"{self.device_name} 确认写入失败：{error}"
             )
 
     @Slot()
@@ -151,5 +153,15 @@ class RuninPlcWorker(QObject):
         if connected != self.last_connection_state:
             self.last_connection_state = connected
             self.connection_changed.emit(self.device_id, connected, message)
-        elif not connected:
+
+    def _report_failure(self, message: str) -> None:
+        """连接状态和运行日志同时报告错误，并限制重复日志频率。"""
+        self._emit_connection(False, message)
+        now = time.monotonic()
+        if (
+            message != self.last_error_message
+            or now - self.last_error_log_at >= 2.0
+        ):
+            self.last_error_message = message
+            self.last_error_log_at = now
             self.log.emit(message)
