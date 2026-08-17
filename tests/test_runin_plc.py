@@ -1,6 +1,9 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from drivers.runin_plc import RuninPlcDriver
+from services.traceability_service import TraceabilityService
 from workers.runin_plc_worker import RuninPlcWorker
 
 
@@ -82,6 +85,28 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(self.driver.read_words(3502, 1)[0], 0b10)
         self.driver.write_read_complete(False)
         self.assertEqual(self.driver.read_words(3502, 1)[0], 0)
+
+    def test_raw_plc_order_is_saved_to_matching_database_fields(self) -> None:
+        rows = [[21384, 20, -41, 234, 7, 1] for _ in range(10)]
+        self.driver.set_simulated_result("7001", rows)
+        snapshot = self.driver.read_result_snapshot()
+
+        with tempfile.TemporaryDirectory() as directory:
+            service = TraceabilityService(Path(directory) / "traceability.db")
+            service.save_tray_batch(
+                "7001", [f"SN{slot:02d}" for slot in range(1, 11)]
+            )
+            records = service.save_runin_tray_results(
+                "7001", "RUNIN_01", snapshot["items"]
+            )
+
+        first = records[0]
+        self.assertEqual(first["runin_speed_rpm"], 21384)
+        self.assertEqual(first["runin_voltage_v"], 20)
+        self.assertEqual(first["runin_temperature_c"], -41)
+        self.assertEqual(first["runin_current_a"], 234)
+        self.assertEqual(first["runin_error_code"], 7)
+        self.assertTrue(first["runin_passed"])
 
 
 class RuninPlcWorkerTests(unittest.TestCase):

@@ -10,7 +10,7 @@ from .tray_entry_widget import TrayEntryWidget
 
 
 class RuninResultWidget(QWidget):
-    """两排五工位结果视图，每个坑位显示 SN 与五项 PLC 数据。"""
+    """两排五工位结果视图，按PLC顺序显示每个坑位的跑合数据。"""
 
     MOTOR_COUNT = 10
     OUTER_MARGIN = 24
@@ -31,7 +31,7 @@ class RuninResultWidget(QWidget):
             sn_label.setProperty("runinSn", True)
             self.sn_labels.append(sn_label)
 
-            value_label = QLabel("I --  U --\nn --  T --  --", self)
+            value_label = QLabel("n --  U --\nT --  I --  E --  --", self)
             value_label.setObjectName(f"runinValueLabel{slot}")
             value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             value_label.setProperty("runinValue", True)
@@ -64,7 +64,7 @@ class RuninResultWidget(QWidget):
             zip(self.sn_labels, self.value_labels), start=1
         ):
             sn_label.setText(f"SN {slot}: --")
-            value_label.setText("I --  U --\nn --  T --  --")
+            value_label.setText("n --  U --\nT --  I --  E --  --")
             value_label.setProperty("passed", "unknown")
             value_label.style().unpolish(value_label)
             value_label.style().polish(value_label)
@@ -91,8 +91,8 @@ class RuninResultWidget(QWidget):
                 passed_property = "ok" if bool(passed_value) else "ng"
             self.sn_labels[index].setText(f"SN {slot}: {product_sn}")
             self.value_labels[index].setText(
-                f"I {current}  U {voltage}\n"
-                f"n {speed}  T {temperature}  {result_text}  E {error_code}"
+                f"n {speed}  U {voltage}\n"
+                f"T {temperature}  I {current}  E {error_code}  {result_text}"
             )
             self.value_labels[index].setProperty("passed", passed_property)
             self.value_labels[index].style().unpolish(self.value_labels[index])

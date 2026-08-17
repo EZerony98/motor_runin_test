@@ -238,7 +238,9 @@ class MainWindowSerialEntryTests(unittest.TestCase):
 
         self.window._on_runin_live_snapshot("RUNIN_01", snapshot)
 
-        self.assertIn("I 101", self.window.runinResultWidget.value_labels[0].text())
+        value_text = self.window.runinResultWidget.value_labels[0].text()
+        self.assertIn("n 17001  U 201", value_text)
+        self.assertIn("T 41  I 101  E 0", value_text)
         self.assertIn("--", self.window.runinResultWidget.value_labels[0].text())
         self.assertIn("D3502.00/.01：0/0", self.window.runinHandshakeLabel.text())
         self.assertIn("实时预览中", self.window.runinResultStateLabel.text())

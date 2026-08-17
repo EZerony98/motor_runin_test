@@ -71,13 +71,13 @@ class TraceabilityService:
                     tray_slot INTEGER NOT NULL CHECK(tray_slot BETWEEN 1 AND 10),
                     product_sn TEXT NOT NULL,
                     station_code TEXT NOT NULL,
-                    runin_voltage_v REAL,
-                    runin_current_a REAL,
                     runin_speed_rpm INTEGER,
+                    runin_voltage_v REAL,
                     runin_temperature_c REAL,
+                    runin_current_a REAL,
+                    runin_error_code INTEGER,
                     runin_passed INTEGER,
                     runin_result_code TEXT,
-                    runin_error_code INTEGER,
                     runin_tested_at TEXT NOT NULL,
                     upload_status TEXT NOT NULL DEFAULT 'pending',
                     server_received_at TEXT,
@@ -107,6 +107,7 @@ class TraceabilityService:
                 "runin_error_code",
                 "INTEGER",
             )
+            self._ensure_runin_results_column_order(connection)
 
     @staticmethod
     def _ensure_column(
@@ -127,6 +128,72 @@ class TraceabilityService:
                 f"ALTER TABLE {table_name} "
                 f"ADD COLUMN {column_name} {column_type}"
             )
+
+    @staticmethod
+    def _ensure_runin_results_column_order(
+        connection: sqlite3.Connection,
+    ) -> None:
+        """将已有数据库的跑合字段迁移为PLC数据顺序，按列名保留数据。"""
+        desired_columns = [
+            "record_id",
+            "tray_cycle_id",
+            "tray_id",
+            "tray_slot",
+            "product_sn",
+            "station_code",
+            "runin_speed_rpm",
+            "runin_voltage_v",
+            "runin_temperature_c",
+            "runin_current_a",
+            "runin_error_code",
+            "runin_passed",
+            "runin_result_code",
+            "runin_tested_at",
+            "upload_status",
+            "server_received_at",
+        ]
+        existing_columns = [
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(runin_results)"
+            ).fetchall()
+        ]
+        if existing_columns == desired_columns:
+            return
+        if not set(desired_columns).issubset(existing_columns):
+            return
+
+        column_list = ", ".join(desired_columns)
+        connection.executescript(
+            f"""
+            CREATE TABLE runin_results_reordered (
+                record_id TEXT PRIMARY KEY,
+                tray_cycle_id TEXT NOT NULL,
+                tray_id TEXT NOT NULL,
+                tray_slot INTEGER NOT NULL CHECK(tray_slot BETWEEN 1 AND 10),
+                product_sn TEXT NOT NULL,
+                station_code TEXT NOT NULL,
+                runin_speed_rpm INTEGER,
+                runin_voltage_v REAL,
+                runin_temperature_c REAL,
+                runin_current_a REAL,
+                runin_error_code INTEGER,
+                runin_passed INTEGER,
+                runin_result_code TEXT,
+                runin_tested_at TEXT NOT NULL,
+                upload_status TEXT NOT NULL DEFAULT 'pending',
+                server_received_at TEXT,
+                UNIQUE (tray_cycle_id, tray_slot),
+                FOREIGN KEY (tray_cycle_id)
+                    REFERENCES tray_cycles(tray_cycle_id)
+                    ON DELETE CASCADE
+            );
+            INSERT INTO runin_results_reordered ({column_list})
+            SELECT {column_list} FROM runin_results;
+            DROP TABLE runin_results;
+            ALTER TABLE runin_results_reordered RENAME TO runin_results;
+            """
+        )
 
     def save_tray_batch(
         self,
@@ -438,13 +505,13 @@ class TraceabilityService:
             "tray_slot": product["tray_slot"],
             "product_sn": product["product_sn"],
             "station_code": str(station_code),
-            "runin_voltage_v": measurements.get("runin_voltage_v"),
-            "runin_current_a": measurements.get("runin_current_a"),
             "runin_speed_rpm": measurements.get("runin_speed_rpm"),
+            "runin_voltage_v": measurements.get("runin_voltage_v"),
             "runin_temperature_c": measurements.get("runin_temperature_c"),
+            "runin_current_a": measurements.get("runin_current_a"),
+            "runin_error_code": measurements.get("runin_error_code"),
             "runin_passed": measurements.get("runin_passed"),
             "runin_result_code": measurements.get("runin_result_code"),
-            "runin_error_code": measurements.get("runin_error_code"),
             "runin_tested_at": tested_at,
         }
 
@@ -456,20 +523,20 @@ class TraceabilityService:
             """
             INSERT INTO runin_results(
                 record_id, tray_cycle_id, tray_id, tray_slot, product_sn,
-                station_code, runin_voltage_v, runin_current_a,
-                runin_speed_rpm, runin_temperature_c, runin_passed,
-                runin_result_code, runin_error_code, runin_tested_at
+                station_code, runin_speed_rpm, runin_voltage_v,
+                runin_temperature_c, runin_current_a, runin_error_code,
+                runin_passed, runin_result_code, runin_tested_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(tray_cycle_id, tray_slot) DO UPDATE SET
                 record_id = excluded.record_id,
                 station_code = excluded.station_code,
-                runin_voltage_v = excluded.runin_voltage_v,
-                runin_current_a = excluded.runin_current_a,
                 runin_speed_rpm = excluded.runin_speed_rpm,
+                runin_voltage_v = excluded.runin_voltage_v,
                 runin_temperature_c = excluded.runin_temperature_c,
+                runin_current_a = excluded.runin_current_a,
+                runin_error_code = excluded.runin_error_code,
                 runin_passed = excluded.runin_passed,
                 runin_result_code = excluded.runin_result_code,
-                runin_error_code = excluded.runin_error_code,
                 runin_tested_at = excluded.runin_tested_at,
                 upload_status = 'pending',
                 server_received_at = NULL
@@ -478,12 +545,13 @@ class TraceabilityService:
                 record["record_id"], record["tray_cycle_id"],
                 record["tray_id"], record["tray_slot"],
                 record["product_sn"], record["station_code"],
-                record["runin_voltage_v"], record["runin_current_a"],
-                record["runin_speed_rpm"], record["runin_temperature_c"],
+                record["runin_speed_rpm"], record["runin_voltage_v"],
+                record["runin_temperature_c"], record["runin_current_a"],
+                record["runin_error_code"],
                 None
                 if record["runin_passed"] is None
                 else int(bool(record["runin_passed"])),
-                record["runin_result_code"], record["runin_error_code"],
+                record["runin_result_code"],
                 record["runin_tested_at"],
             ),
         )

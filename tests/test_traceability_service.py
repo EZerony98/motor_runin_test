@@ -60,6 +60,94 @@ class TraceabilityServiceTests(unittest.TestCase):
             }
         self.assertIn("runin_error_code", columns)
 
+    def test_runin_result_columns_follow_plc_field_order(self) -> None:
+        with self.service._connect() as connection:
+            columns = [
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(runin_results)"
+                )
+            ]
+
+        first_measurement = columns.index("runin_speed_rpm")
+        self.assertEqual(
+            columns[first_measurement : first_measurement + 6],
+            [
+                "runin_speed_rpm",
+                "runin_voltage_v",
+                "runin_temperature_c",
+                "runin_current_a",
+                "runin_error_code",
+                "runin_passed",
+            ],
+        )
+
+    def test_existing_runin_rows_survive_column_order_migration(self) -> None:
+        legacy_path = Path(self.temporary_directory.name) / "old-order.db"
+        with sqlite3.connect(str(legacy_path)) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE tray_cycles (
+                    tray_cycle_id TEXT PRIMARY KEY,
+                    tray_id TEXT NOT NULL,
+                    loaded_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    peer_sync_status TEXT NOT NULL DEFAULT 'pending',
+                    peer_synced_at TEXT,
+                    last_sync_error TEXT
+                );
+                INSERT INTO tray_cycles(
+                    tray_cycle_id, tray_id, loaded_at
+                ) VALUES ('cycle-1', '7001', '2026-08-17T10:00:00+08:00');
+                CREATE TABLE runin_results (
+                    record_id TEXT PRIMARY KEY,
+                    tray_cycle_id TEXT NOT NULL,
+                    tray_id TEXT NOT NULL,
+                    tray_slot INTEGER NOT NULL,
+                    product_sn TEXT NOT NULL,
+                    station_code TEXT NOT NULL,
+                    runin_voltage_v REAL,
+                    runin_current_a REAL,
+                    runin_speed_rpm INTEGER,
+                    runin_temperature_c REAL,
+                    runin_passed INTEGER,
+                    runin_result_code TEXT,
+                    runin_error_code INTEGER,
+                    runin_tested_at TEXT NOT NULL,
+                    upload_status TEXT NOT NULL DEFAULT 'pending',
+                    server_received_at TEXT
+                );
+                INSERT INTO runin_results VALUES (
+                    'record-1', 'cycle-1', '7001', 1, 'SN01', 'RUNIN_01',
+                    20, 234, 21384, -41, 1, '0', 7,
+                    '2026-08-17T10:30:00+08:00', 'pending', NULL
+                );
+                """
+            )
+
+        migrated = TraceabilityService(legacy_path)
+        with migrated._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM runin_results WHERE record_id = 'record-1'"
+            ).fetchone()
+            columns = [
+                item["name"]
+                for item in connection.execute(
+                    "PRAGMA table_info(runin_results)"
+                )
+            ]
+
+        self.assertEqual(row["runin_speed_rpm"], 21384)
+        self.assertEqual(row["runin_voltage_v"], 20)
+        self.assertEqual(row["runin_temperature_c"], -41)
+        self.assertEqual(row["runin_current_a"], 234)
+        self.assertEqual(row["runin_error_code"], 7)
+        self.assertEqual(row["runin_passed"], 1)
+        self.assertLess(
+            columns.index("runin_speed_rpm"),
+            columns.index("runin_voltage_v"),
+        )
+
     def test_runin_result_uses_product_sn_from_mapping(self) -> None:
         serial_numbers = [f"SN{index:02d}" for index in range(1, 11)]
         self.service.save_tray_batch("7001", serial_numbers)
