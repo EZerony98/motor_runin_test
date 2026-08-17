@@ -6,11 +6,21 @@ from .plc_fins import FinsPlcDriver, FinsProtocolError
 
 
 class RuninPlcDriver(FinsPlcDriver):
+    # 界面、数据库及上传记录统一使用的标准字段顺序。
     PRODUCT_FIELDS = (
         "runin_speed_rpm",
         "runin_voltage_v",
         "runin_temperature_c",
         "runin_current_a",
+        "runin_error_code",
+        "runin_passed",
+    )
+    # 现场PLC当前在每组6个DM中的实际排列。
+    DEFAULT_PLC_FIELD_ORDER = (
+        "runin_voltage_v",
+        "runin_speed_rpm",
+        "runin_current_a",
+        "runin_temperature_c",
         "runin_error_code",
         "runin_passed",
     )
@@ -26,8 +36,16 @@ class RuninPlcDriver(FinsPlcDriver):
         self.handshake_address = int(mapping.get("handshake_address", 3502))
         self.data_ready_bit = int(mapping.get("data_ready_bit", 0))
         self.read_complete_bit = int(mapping.get("read_complete_bit", 1))
+        self.plc_field_order = tuple(
+            mapping.get("result_field_order", self.DEFAULT_PLC_FIELD_ORDER)
+        )
         if self.products_per_tray != 10 or self.words_per_product != 6:
             raise ValueError("跑合结果当前必须按 10 个产品、每产品 6 个 INT 配置")
+        if (
+            len(self.plc_field_order) != self.words_per_product
+            or set(self.plc_field_order) != set(self.PRODUCT_FIELDS)
+        ):
+            raise ValueError("跑合结果字段顺序必须完整包含6个标准字段且不能重复")
         if self.data_ready_bit == self.read_complete_bit:
             raise ValueError("数据就绪位和读取完成位不能相同")
 
@@ -96,7 +114,8 @@ class RuninPlcDriver(FinsPlcDriver):
                 self.word_to_int16(value)
                 for value in words[start : start + self.words_per_product]
             ]
-            passed = values[5]
+            raw_values = dict(zip(self.plc_field_order, values))
+            passed = raw_values["runin_passed"]
             if strict_passed and passed not in (0, 1):
                 raise FinsProtocolError(
                     f"托盘 {tray_id} 坑位 {slot} 合格值必须为 0 或 1，实际 {passed}"
@@ -109,11 +128,13 @@ class RuninPlcDriver(FinsPlcDriver):
             items.append(
                 {
                     "tray_slot": slot,
-                    "runin_speed_rpm": values[0],
-                    "runin_voltage_v": values[1],
-                    "runin_temperature_c": values[2],
-                    "runin_current_a": values[3],
-                    "runin_error_code": values[4],
+                    "runin_speed_rpm": raw_values["runin_speed_rpm"],
+                    "runin_voltage_v": raw_values["runin_voltage_v"],
+                    "runin_temperature_c": raw_values[
+                        "runin_temperature_c"
+                    ],
+                    "runin_current_a": raw_values["runin_current_a"],
+                    "runin_error_code": raw_values["runin_error_code"],
                     "runin_passed": passed_value,
                     "runin_result_code": (
                         0 if passed_value else 1

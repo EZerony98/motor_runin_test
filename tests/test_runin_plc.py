@@ -32,10 +32,10 @@ def runin_simulation_config():
 def sample_rows():
     return [
         [
-            17000 + slot,
             200 + slot,
-            40 + slot,
+            17000 + slot,
             100 + slot,
+            40 + slot,
             0 if slot != 10 else 105,
             slot != 10,
         ]
@@ -87,7 +87,7 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(self.driver.read_words(3502, 1)[0], 0)
 
     def test_raw_plc_order_is_saved_to_matching_database_fields(self) -> None:
-        rows = [[21384, 20, -41, 234, 7, 1] for _ in range(10)]
+        rows = [[20, 21384, 234, -41, 7, 1] for _ in range(10)]
         self.driver.set_simulated_result("7001", rows)
         snapshot = self.driver.read_result_snapshot()
 
@@ -107,6 +107,31 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(first["runin_current_a"], 234)
         self.assertEqual(first["runin_error_code"], 7)
         self.assertTrue(first["runin_passed"])
+
+    def test_plc_field_order_can_be_overridden_by_mapping(self) -> None:
+        config = runin_simulation_config()
+        config["mapping"]["result_field_order"] = [
+            "runin_speed_rpm",
+            "runin_voltage_v",
+            "runin_temperature_c",
+            "runin_current_a",
+            "runin_error_code",
+            "runin_passed",
+        ]
+        driver = RuninPlcDriver(config)
+        driver.connect()
+        try:
+            driver.set_simulated_result(
+                "7001", [[21384, 20, -41, 234, 7, 1] for _ in range(10)]
+            )
+            item = driver.read_result_snapshot()["items"][0]
+        finally:
+            driver.disconnect()
+
+        self.assertEqual(item["runin_speed_rpm"], 21384)
+        self.assertEqual(item["runin_voltage_v"], 20)
+        self.assertEqual(item["runin_temperature_c"], -41)
+        self.assertEqual(item["runin_current_a"], 234)
 
 
 class RuninPlcWorkerTests(unittest.TestCase):
