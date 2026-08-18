@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from drivers.plc_fins import FinsProtocolError
 from drivers.runin_plc import RuninPlcDriver
 from services.traceability_service import TraceabilityService
 from workers.runin_plc_worker import RuninPlcWorker
@@ -79,7 +80,26 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertFalse(snapshot["data_ready"])
         self.assertEqual(snapshot["items"][0]["runin_current_a"], 101)
         self.assertEqual(snapshot["items"][9]["runin_speed_rpm"], 17010)
+        self.assertTrue(snapshot["items"][0]["runin_passed"])
+        self.assertEqual(snapshot["items"][0]["runin_passed_raw"], 1)
+
+    def test_live_snapshot_preserves_invalid_passed_value_for_diagnostics(self) -> None:
+        rows = sample_rows()
+        rows[0][-1] = 20
+        self.driver.set_simulated_result("7001", rows, ready=False)
+
+        snapshot = self.driver.read_live_snapshot()
+
         self.assertIsNone(snapshot["items"][0]["runin_passed"])
+        self.assertEqual(snapshot["items"][0]["runin_passed_raw"], 20)
+
+    def test_ready_snapshot_rejects_invalid_passed_value(self) -> None:
+        rows = sample_rows()
+        rows[0][-1] = 20
+        self.driver.set_simulated_result("7001", rows, ready=True)
+
+        with self.assertRaisesRegex(FinsProtocolError, "实际 20"):
+            self.driver.read_result_snapshot()
 
     def test_writes_read_complete_to_dm3502_bit_one(self) -> None:
         self.driver.write_read_complete(True)

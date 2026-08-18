@@ -243,6 +243,33 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.assertIn("T 41  I 101  E 0", value_text)
         self.assertIn("--", self.window.runinResultWidget.value_labels[0].text())
         self.assertIn("D3502.00/.01：0/0", self.window.runinHandshakeLabel.text())
+
+    def test_runin_live_snapshot_displays_invalid_passed_raw_value(self) -> None:
+        snapshot = {
+            "device_id": "RUNIN_01",
+            "device_name": "跑合设备 1",
+            "tray_id": "7001",
+            "data_ready": False,
+            "handshake_word": 0,
+            "items": [
+                {
+                    "tray_slot": 1,
+                    "runin_speed_rpm": 21696,
+                    "runin_voltage_v": 234,
+                    "runin_temperature_c": 57,
+                    "runin_current_a": 185,
+                    "runin_error_code": 1,
+                    "runin_passed_raw": 20,
+                    "runin_passed": None,
+                }
+            ],
+        }
+
+        self.window._on_runin_live_snapshot("RUNIN_01", snapshot)
+
+        self.assertIn(
+            "异常(20)", self.window.runinResultWidget.value_labels[0].text()
+        )
         self.assertIn("实时预览中", self.window.runinResultStateLabel.text())
 
     def test_runin_address_label_follows_device_configuration(self) -> None:

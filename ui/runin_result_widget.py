@@ -83,9 +83,14 @@ class RuninResultWidget(QWidget):
             temperature = self._display(item.get("runin_temperature_c"))
             error_code = self._display(item.get("runin_error_code"))
             passed_value = item.get("runin_passed")
+            passed_raw = item.get("runin_passed_raw")
             if passed_value is None:
-                result_text = "--"
-                passed_property = "unknown"
+                if passed_raw is None:
+                    result_text = "--"
+                    passed_property = "unknown"
+                else:
+                    result_text = f"异常({self._display(passed_raw)})"
+                    passed_property = "ng"
             else:
                 result_text = "OK" if bool(passed_value) else "NG"
                 passed_property = "ok" if bool(passed_value) else "ng"

@@ -128,11 +128,9 @@ class RuninPlcDriver(FinsPlcDriver):
                 raise FinsProtocolError(
                     f"托盘 {tray_id} 坑位 {slot} 合格值必须为 0 或 1，实际 {passed}"
                 )
-            passed_value = (
-                bool(passed)
-                if passed in (0, 1) and (strict_passed or data_ready)
-                else None
-            )
+            # 合格标志也需要像其他测量值一样实时预览；握手位只控制
+            # 是否允许正式保存，不应控制界面是否显示 PLC 当前值。
+            passed_value = bool(passed) if passed in (0, 1) else None
             items.append(
                 {
                     "tray_slot": slot,
@@ -143,6 +141,7 @@ class RuninPlcDriver(FinsPlcDriver):
                     ],
                     "runin_current_a": raw_values["runin_current_a"],
                     "runin_error_code": raw_values["runin_error_code"],
+                    "runin_passed_raw": passed,
                     "runin_passed": passed_value,
                     "runin_result_code": (
                         0 if passed_value else 1
