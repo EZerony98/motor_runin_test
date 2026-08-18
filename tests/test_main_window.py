@@ -249,6 +249,7 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.window.runin_plc_configs[0]["mapping"].update(
             {
                 "result_base_address": 2000,
+                "result_start_offset": 0,
                 "words_per_product": 6,
                 "handshake_address": 3002,
                 "data_ready_bit": 3,

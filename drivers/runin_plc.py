@@ -15,12 +15,12 @@ class RuninPlcDriver(FinsPlcDriver):
         "runin_error_code",
         "runin_passed",
     )
-    # 现场PLC当前在每组6个DM中的实际排列。
+    # 从数组1号元素开始后，每组6个DM的实际排列。
     DEFAULT_PLC_FIELD_ORDER = (
-        "runin_voltage_v",
         "runin_speed_rpm",
-        "runin_current_a",
+        "runin_voltage_v",
         "runin_temperature_c",
+        "runin_current_a",
         "runin_error_code",
         "runin_passed",
     )
@@ -30,7 +30,13 @@ class RuninPlcDriver(FinsPlcDriver):
         self.device_id = str(config.get("id", "RUNIN_01"))
         self.device_name = str(config.get("name", self.device_id))
         mapping = config.get("mapping", {})
-        self.result_base_address = int(mapping.get("result_base_address", 1000))
+        self.result_array_base_address = int(
+            mapping.get("result_base_address", 1000)
+        )
+        self.result_start_offset = int(mapping.get("result_start_offset", 1))
+        self.result_base_address = (
+            self.result_array_base_address + self.result_start_offset
+        )
         self.products_per_tray = int(mapping.get("products_per_tray", 10))
         self.words_per_product = int(mapping.get("words_per_product", 6))
         self.handshake_address = int(mapping.get("handshake_address", 3502))
@@ -41,6 +47,8 @@ class RuninPlcDriver(FinsPlcDriver):
         )
         if self.products_per_tray != 10 or self.words_per_product != 6:
             raise ValueError("跑合结果当前必须按 10 个产品、每产品 6 个 INT 配置")
+        if self.result_start_offset < 0:
+            raise ValueError("跑合结果起始偏移不能为负数")
         if (
             len(self.plc_field_order) != self.words_per_product
             or set(self.plc_field_order) != set(self.PRODUCT_FIELDS)
@@ -63,7 +71,7 @@ class RuninPlcDriver(FinsPlcDriver):
         return bool(word & (1 << self.data_ready_bit))
 
     def read_live_snapshot(self) -> Dict[str, Any]:
-        """不依赖握手位，读取当前托盘号及 D1000-D1059 用于界面预览。"""
+        """不依赖握手位，读取当前托盘号及实际产品区用于界面预览。"""
         self._require_connection()
         handshake_word = self.read_words(self.handshake_address, 1)[0]
         tray_id = self.read_tray_id()

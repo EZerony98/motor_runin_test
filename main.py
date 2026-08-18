@@ -349,10 +349,14 @@ QTabBar::tab:selected {
     ) -> tuple[int, int, int, int, int]:
         mapping = self._runin_mapping(device_id)
         snapshot = snapshot or {}
+        configured_result_base = int(
+            mapping.get("result_base_address", 1000)
+        )
+        result_start_offset = int(mapping.get("result_start_offset", 1))
         result_base = int(
             snapshot.get(
                 "result_base_address",
-                mapping.get("result_base_address", 1000),
+                configured_result_base + result_start_offset,
             )
         )
         product_count = int(mapping.get("products_per_tray", 10))
@@ -913,7 +917,7 @@ QTabBar::tab:selected {
     def _on_runin_live_snapshot(
         self, device_id: str, snapshot: Dict[str, Any]
     ) -> None:
-        """持续显示 PLC 当前 D1000-D1059，不以握手置位为前提。"""
+        """持续显示 PLC 当前实际产品结果区，不以握手置位为前提。"""
         device_id = str(device_id)
         display_snapshot = dict(snapshot)
         tray_id = str(display_snapshot.get("tray_id", "")).strip()

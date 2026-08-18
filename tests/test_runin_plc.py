@@ -20,6 +20,7 @@ def runin_simulation_config():
             "tray_id_words": 1,
             "tray_id_type": "int16",
             "result_base_address": 1000,
+            "result_start_offset": 1,
             "products_per_tray": 10,
             "words_per_product": 6,
             "handshake_address": 3502,
@@ -32,10 +33,10 @@ def runin_simulation_config():
 def sample_rows():
     return [
         [
-            200 + slot,
             17000 + slot,
-            100 + slot,
+            200 + slot,
             40 + slot,
+            100 + slot,
             0 if slot != 10 else 105,
             slot != 10,
         ]
@@ -51,7 +52,7 @@ class RuninPlcDriverTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.driver.disconnect()
 
-    def test_reads_dm1000_to_1059_as_ten_interleaved_results(self) -> None:
+    def test_reads_dm1001_to_1060_as_ten_interleaved_results(self) -> None:
         self.driver.set_simulated_result("7001", sample_rows())
 
         snapshot = self.driver.read_result_snapshot()
@@ -65,8 +66,8 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(snapshot["items"][9]["runin_voltage_v"], 210)
         self.assertFalse(snapshot["items"][9]["runin_passed"])
         self.assertEqual(snapshot["items"][9]["runin_error_code"], 105)
-        self.assertEqual(snapshot["result_base_address"], 1000)
-        self.assertEqual(snapshot["result_end_address"], 1059)
+        self.assertEqual(snapshot["result_base_address"], 1001)
+        self.assertEqual(snapshot["result_end_address"], 1060)
         self.assertEqual(snapshot["handshake_address"], 3502)
 
     def test_live_snapshot_reads_values_without_data_ready_handshake(self) -> None:
@@ -87,7 +88,9 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(self.driver.read_words(3502, 1)[0], 0)
 
     def test_raw_plc_order_is_saved_to_matching_database_fields(self) -> None:
-        rows = [[20, 21384, 234, -41, 7, 1] for _ in range(10)]
+        # 使用现场触摸屏同量级数据，确认 D1000 占位不会进入任何字段。
+        rows = [[21696, 234, 34, 208, 7, 1] for _ in range(10)]
+        self.driver.write_words(1000, [1])
         self.driver.set_simulated_result("7001", rows)
         snapshot = self.driver.read_result_snapshot()
 
@@ -101,20 +104,20 @@ class RuninPlcDriverTests(unittest.TestCase):
             )
 
         first = records[0]
-        self.assertEqual(first["runin_speed_rpm"], 21384)
-        self.assertEqual(first["runin_voltage_v"], 20)
-        self.assertEqual(first["runin_temperature_c"], -41)
-        self.assertEqual(first["runin_current_a"], 234)
+        self.assertEqual(first["runin_speed_rpm"], 21696)
+        self.assertEqual(first["runin_voltage_v"], 234)
+        self.assertEqual(first["runin_temperature_c"], 34)
+        self.assertEqual(first["runin_current_a"], 208)
         self.assertEqual(first["runin_error_code"], 7)
         self.assertTrue(first["runin_passed"])
 
     def test_plc_field_order_can_be_overridden_by_mapping(self) -> None:
         config = runin_simulation_config()
         config["mapping"]["result_field_order"] = [
-            "runin_speed_rpm",
             "runin_voltage_v",
-            "runin_temperature_c",
+            "runin_speed_rpm",
             "runin_current_a",
+            "runin_temperature_c",
             "runin_error_code",
             "runin_passed",
         ]
@@ -122,7 +125,7 @@ class RuninPlcDriverTests(unittest.TestCase):
         driver.connect()
         try:
             driver.set_simulated_result(
-                "7001", [[21384, 20, -41, 234, 7, 1] for _ in range(10)]
+                "7001", [[20, 21384, 234, -41, 7, 1] for _ in range(10)]
             )
             item = driver.read_result_snapshot()["items"][0]
         finally:
