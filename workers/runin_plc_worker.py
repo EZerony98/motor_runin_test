@@ -12,6 +12,8 @@ class RuninPlcWorker(QObject):
     connection_changed = Signal(str, bool, str)
     live_snapshot = Signal(str, dict)
     result_ready = Signal(str, dict)
+    judgement_written = Signal(str, dict)
+    judgement_write_failed = Signal(str, str)
     log = Signal(str)
     finished = Signal()
 
@@ -139,6 +141,31 @@ class RuninPlcWorker(QObject):
             self._report_failure(
                 f"{self.device_name} 确认写入失败：{error}"
             )
+
+    @Slot(str, dict)
+    def write_judgement(self, device_id: str, snapshot: Dict[str, Any]) -> None:
+        """把主线程按SN型号计算的10个结果写回PLC原合格标志地址。"""
+        if str(device_id) != self.device_id or not self.processing_pending:
+            return
+        try:
+            if not self.driver.is_connected:
+                self.driver.connect()
+            if not self.driver.read_data_ready():
+                raise RuntimeError("写入上位机判定前PLC数据就绪位已清除")
+            self.driver.write_pass_results(snapshot.get("items", []))
+            if not self.driver.read_data_ready():
+                raise RuntimeError("写入上位机判定期间PLC数据就绪位被清除")
+            self.log.emit(
+                f"{self.device_name} 上位机判定结果已写入10个合格标志地址"
+            )
+            self.judgement_written.emit(self.device_id, dict(snapshot))
+        except Exception as error:
+            self.driver.disconnect()
+            self.processing_pending = False
+            self.retry_not_before = time.monotonic() + self.retry_interval_seconds
+            message = f"{self.device_name} 上位机判定结果写入失败：{error}"
+            self._report_failure(message)
+            self.judgement_write_failed.emit(self.device_id, str(error))
 
     @Slot()
     def stop(self) -> None:

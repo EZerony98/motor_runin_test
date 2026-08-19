@@ -65,6 +65,7 @@ class RuninResultWidget(QWidget):
         ):
             sn_label.setText(f"SN {slot}: --")
             value_label.setText("n --  U --\nT --  I --  E --  --")
+            value_label.setToolTip("")
             value_label.setProperty("passed", "unknown")
             value_label.style().unpolish(value_label)
             value_label.style().polish(value_label)
@@ -84,8 +85,15 @@ class RuninResultWidget(QWidget):
             error_code = self._display(item.get("runin_error_code"))
             passed_value = item.get("runin_passed")
             passed_raw = item.get("runin_passed_raw")
+            quality_error = str(item.get("quality_error") or "").strip()
+            quality_failures = [
+                str(value) for value in item.get("quality_failures", [])
+            ]
             if passed_value is None:
-                if passed_raw is None:
+                if quality_error:
+                    result_text = "未判定"
+                    passed_property = "ng"
+                elif passed_raw is None:
                     result_text = "--"
                     passed_property = "unknown"
                 else:
@@ -100,6 +108,16 @@ class RuninResultWidget(QWidget):
                 f"T {temperature}  I {current}  E {error_code}  {result_text}"
             )
             self.value_labels[index].setProperty("passed", passed_property)
+            tooltip_lines = []
+            if item.get("product_model"):
+                tooltip_lines.append(
+                    f"型号：{item.get('product_model')}，规则："
+                    f"{item.get('quality_rule_version') or '--'}"
+                )
+            if quality_error:
+                tooltip_lines.append(quality_error)
+            tooltip_lines.extend(quality_failures)
+            self.value_labels[index].setToolTip("\n".join(tooltip_lines))
             self.value_labels[index].style().unpolish(self.value_labels[index])
             self.value_labels[index].style().polish(self.value_labels[index])
 

@@ -71,6 +71,9 @@ class TraceabilityService:
                     tray_slot INTEGER NOT NULL CHECK(tray_slot BETWEEN 1 AND 10),
                     product_sn TEXT NOT NULL,
                     station_code TEXT NOT NULL,
+                    product_model TEXT,
+                    quality_rule_version TEXT,
+                    judgement_source TEXT,
                     runin_speed_rpm INTEGER,
                     runin_voltage_v REAL,
                     runin_temperature_c REAL,
@@ -78,6 +81,7 @@ class TraceabilityService:
                     runin_error_code INTEGER,
                     runin_passed INTEGER,
                     runin_result_code TEXT,
+                    quality_failures_json TEXT,
                     runin_tested_at TEXT NOT NULL,
                     upload_status TEXT NOT NULL DEFAULT 'pending',
                     server_received_at TEXT,
@@ -107,6 +111,15 @@ class TraceabilityService:
                 "runin_error_code",
                 "INTEGER",
             )
+            for column_name in (
+                "product_model",
+                "quality_rule_version",
+                "judgement_source",
+                "quality_failures_json",
+            ):
+                self._ensure_column(
+                    connection, "runin_results", column_name, "TEXT"
+                )
             self._ensure_runin_results_column_order(connection)
 
     @staticmethod
@@ -141,6 +154,9 @@ class TraceabilityService:
             "tray_slot",
             "product_sn",
             "station_code",
+            "product_model",
+            "quality_rule_version",
+            "judgement_source",
             "runin_speed_rpm",
             "runin_voltage_v",
             "runin_temperature_c",
@@ -148,6 +164,7 @@ class TraceabilityService:
             "runin_error_code",
             "runin_passed",
             "runin_result_code",
+            "quality_failures_json",
             "runin_tested_at",
             "upload_status",
             "server_received_at",
@@ -173,6 +190,9 @@ class TraceabilityService:
                 tray_slot INTEGER NOT NULL CHECK(tray_slot BETWEEN 1 AND 10),
                 product_sn TEXT NOT NULL,
                 station_code TEXT NOT NULL,
+                product_model TEXT,
+                quality_rule_version TEXT,
+                judgement_source TEXT,
                 runin_speed_rpm INTEGER,
                 runin_voltage_v REAL,
                 runin_temperature_c REAL,
@@ -180,6 +200,7 @@ class TraceabilityService:
                 runin_error_code INTEGER,
                 runin_passed INTEGER,
                 runin_result_code TEXT,
+                quality_failures_json TEXT,
                 runin_tested_at TEXT NOT NULL,
                 upload_status TEXT NOT NULL DEFAULT 'pending',
                 server_received_at TEXT,
@@ -451,6 +472,16 @@ class TraceabilityService:
             raise ValueError("跑合结果托盘号不能为空")
         if slots != list(range(1, 11)):
             raise ValueError("跑合结果必须完整包含坑位 1～10")
+        unjudged_slots = [
+            str(item.get("tray_slot"))
+            for item in items
+            if not isinstance(item.get("runin_passed"), bool)
+            or item.get("judgement_source") != "upper_computer"
+        ]
+        if unjudged_slots:
+            raise ValueError(
+                "以下坑位缺少上位机合格判定：" + "、".join(unjudged_slots)
+            )
         tested_at = tested_at or local_timestamp()
 
         with self._connect() as connection:
@@ -505,6 +536,9 @@ class TraceabilityService:
             "tray_slot": product["tray_slot"],
             "product_sn": product["product_sn"],
             "station_code": str(station_code),
+            "product_model": measurements.get("product_model"),
+            "quality_rule_version": measurements.get("quality_rule_version"),
+            "judgement_source": measurements.get("judgement_source"),
             "runin_speed_rpm": measurements.get("runin_speed_rpm"),
             "runin_voltage_v": measurements.get("runin_voltage_v"),
             "runin_temperature_c": measurements.get("runin_temperature_c"),
@@ -512,6 +546,9 @@ class TraceabilityService:
             "runin_error_code": measurements.get("runin_error_code"),
             "runin_passed": measurements.get("runin_passed"),
             "runin_result_code": measurements.get("runin_result_code"),
+            "quality_failures": list(
+                measurements.get("quality_failures") or []
+            ),
             "runin_tested_at": tested_at,
         }
 
@@ -523,13 +560,18 @@ class TraceabilityService:
             """
             INSERT INTO runin_results(
                 record_id, tray_cycle_id, tray_id, tray_slot, product_sn,
-                station_code, runin_speed_rpm, runin_voltage_v,
+                station_code, product_model, quality_rule_version,
+                judgement_source, runin_speed_rpm, runin_voltage_v,
                 runin_temperature_c, runin_current_a, runin_error_code,
-                runin_passed, runin_result_code, runin_tested_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                runin_passed, runin_result_code, quality_failures_json,
+                runin_tested_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(tray_cycle_id, tray_slot) DO UPDATE SET
                 record_id = excluded.record_id,
                 station_code = excluded.station_code,
+                product_model = excluded.product_model,
+                quality_rule_version = excluded.quality_rule_version,
+                judgement_source = excluded.judgement_source,
                 runin_speed_rpm = excluded.runin_speed_rpm,
                 runin_voltage_v = excluded.runin_voltage_v,
                 runin_temperature_c = excluded.runin_temperature_c,
@@ -537,6 +579,7 @@ class TraceabilityService:
                 runin_error_code = excluded.runin_error_code,
                 runin_passed = excluded.runin_passed,
                 runin_result_code = excluded.runin_result_code,
+                quality_failures_json = excluded.quality_failures_json,
                 runin_tested_at = excluded.runin_tested_at,
                 upload_status = 'pending',
                 server_received_at = NULL
@@ -545,6 +588,8 @@ class TraceabilityService:
                 record["record_id"], record["tray_cycle_id"],
                 record["tray_id"], record["tray_slot"],
                 record["product_sn"], record["station_code"],
+                record["product_model"], record["quality_rule_version"],
+                record["judgement_source"],
                 record["runin_speed_rpm"], record["runin_voltage_v"],
                 record["runin_temperature_c"], record["runin_current_a"],
                 record["runin_error_code"],
@@ -552,6 +597,7 @@ class TraceabilityService:
                 if record["runin_passed"] is None
                 else int(bool(record["runin_passed"])),
                 record["runin_result_code"],
+                json.dumps(record["quality_failures"], ensure_ascii=False),
                 record["runin_tested_at"],
             ),
         )

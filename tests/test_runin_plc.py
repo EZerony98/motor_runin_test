@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from drivers.plc_fins import FinsProtocolError
 from drivers.runin_plc import RuninPlcDriver
+from services.quality_rule_service import QualityRuleService
 from services.traceability_service import TraceabilityService
 from workers.runin_plc_worker import RuninPlcWorker
 
@@ -45,6 +45,25 @@ def sample_rows():
     ]
 
 
+def configured_rules():
+    return {
+        "models": {
+            "C68": {
+                "sn_prefixes": ["C68"],
+                "configured": True,
+                "rule_version": "test-1",
+                "ranges": {
+                    "runin_speed_rpm": {"min": 16000, "max": 22000},
+                    "runin_voltage_v": {"min": 190, "max": 220},
+                    "runin_temperature_c": {"min": 30, "max": 60},
+                    "runin_current_a": {"min": 90, "max": 120},
+                },
+                "allowed_error_codes": [0],
+            }
+        }
+    }
+
+
 class RuninPlcDriverTests(unittest.TestCase):
     def setUp(self) -> None:
         self.driver = RuninPlcDriver(runin_simulation_config())
@@ -65,7 +84,8 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(snapshot["items"][0]["runin_voltage_v"], 201)
         self.assertEqual(snapshot["items"][0]["runin_temperature_c"], 41)
         self.assertEqual(snapshot["items"][9]["runin_voltage_v"], 210)
-        self.assertFalse(snapshot["items"][9]["runin_passed"])
+        self.assertIsNone(snapshot["items"][9]["runin_passed"])
+        self.assertEqual(snapshot["items"][9]["plc_passed_raw"], 0)
         self.assertEqual(snapshot["items"][9]["runin_error_code"], 105)
         self.assertEqual(snapshot["result_base_address"], 1001)
         self.assertEqual(snapshot["result_end_address"], 1060)
@@ -80,10 +100,10 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertFalse(snapshot["data_ready"])
         self.assertEqual(snapshot["items"][0]["runin_current_a"], 101)
         self.assertEqual(snapshot["items"][9]["runin_speed_rpm"], 17010)
-        self.assertTrue(snapshot["items"][0]["runin_passed"])
-        self.assertEqual(snapshot["items"][0]["runin_passed_raw"], 1)
+        self.assertIsNone(snapshot["items"][0]["runin_passed"])
+        self.assertEqual(snapshot["items"][0]["plc_passed_raw"], 1)
 
-    def test_live_snapshot_preserves_invalid_passed_value_for_diagnostics(self) -> None:
+    def test_plc_passed_value_is_only_preserved_for_diagnostics(self) -> None:
         rows = sample_rows()
         rows[0][-1] = 20
         self.driver.set_simulated_result("7001", rows, ready=False)
@@ -91,15 +111,19 @@ class RuninPlcDriverTests(unittest.TestCase):
         snapshot = self.driver.read_live_snapshot()
 
         self.assertIsNone(snapshot["items"][0]["runin_passed"])
-        self.assertEqual(snapshot["items"][0]["runin_passed_raw"], 20)
+        self.assertEqual(snapshot["items"][0]["plc_passed_raw"], 20)
 
-    def test_ready_snapshot_rejects_invalid_passed_value(self) -> None:
-        rows = sample_rows()
-        rows[0][-1] = 20
-        self.driver.set_simulated_result("7001", rows, ready=True)
+    def test_writes_upper_computer_results_to_original_pass_addresses(self) -> None:
+        self.driver.set_simulated_result("7001", sample_rows(), ready=True)
+        items = self.driver.read_result_snapshot()["items"]
+        for item in items:
+            item["runin_passed"] = item["tray_slot"] != 10
 
-        with self.assertRaisesRegex(FinsProtocolError, "实际 20"):
-            self.driver.read_result_snapshot()
+        self.driver.write_pass_results(items)
+
+        self.assertEqual(self.driver.read_words(1006, 1)[0], 1)
+        self.assertEqual(self.driver.read_words(1012, 1)[0], 1)
+        self.assertEqual(self.driver.read_words(1060, 1)[0], 0)
 
     def test_writes_read_complete_to_dm3502_bit_one(self) -> None:
         self.driver.write_read_complete(True)
@@ -109,27 +133,33 @@ class RuninPlcDriverTests(unittest.TestCase):
 
     def test_raw_plc_order_is_saved_to_matching_database_fields(self) -> None:
         # 使用现场触摸屏同量级数据，确认 D1000 占位不会进入任何字段。
-        rows = [[21696, 234, 34, 208, 7, 1] for _ in range(10)]
+        rows = [[21696, 210, 34, 108, 0, 20] for _ in range(10)]
         self.driver.write_words(1000, [1])
         self.driver.set_simulated_result("7001", rows)
         snapshot = self.driver.read_result_snapshot()
+        for slot, item in enumerate(snapshot["items"], start=1):
+            item["product_sn"] = f"C68SN{slot:02d}"
+        judged_items = QualityRuleService(configured_rules()).evaluate_items(
+            snapshot["items"]
+        )
 
         with tempfile.TemporaryDirectory() as directory:
             service = TraceabilityService(Path(directory) / "traceability.db")
             service.save_tray_batch(
-                "7001", [f"SN{slot:02d}" for slot in range(1, 11)]
+                "7001", [f"C68SN{slot:02d}" for slot in range(1, 11)]
             )
             records = service.save_runin_tray_results(
-                "7001", "RUNIN_01", snapshot["items"]
+                "7001", "RUNIN_01", judged_items
             )
 
         first = records[0]
         self.assertEqual(first["runin_speed_rpm"], 21696)
-        self.assertEqual(first["runin_voltage_v"], 234)
+        self.assertEqual(first["runin_voltage_v"], 210)
         self.assertEqual(first["runin_temperature_c"], 34)
-        self.assertEqual(first["runin_current_a"], 208)
-        self.assertEqual(first["runin_error_code"], 7)
+        self.assertEqual(first["runin_current_a"], 108)
+        self.assertEqual(first["runin_error_code"], 0)
         self.assertTrue(first["runin_passed"])
+        self.assertEqual(first["product_model"], "C68")
 
     def test_plc_field_order_can_be_overridden_by_mapping(self) -> None:
         config = runin_simulation_config()
@@ -180,6 +210,30 @@ class RuninPlcWorkerTests(unittest.TestCase):
         self.worker.driver.write_bit(3502, 0, False)
         self.worker.poll()
         self.assertEqual(self.worker.driver.read_words(3502, 1)[0], 0)
+
+    def test_worker_writes_judgement_before_database_acknowledgement(self) -> None:
+        received = []
+        written = []
+        self.worker.result_ready.connect(
+            lambda device_id, data: received.append((device_id, data))
+        )
+        self.worker.judgement_written.connect(
+            lambda device_id, data: written.append((device_id, data))
+        )
+        self.worker.driver.connect()
+        self.worker.driver.set_simulated_result("7001", sample_rows())
+        self.worker.poll()
+        judged_snapshot = received[0][1]
+        for item in judged_snapshot["items"]:
+            item["runin_passed"] = item["tray_slot"] != 10
+
+        self.worker.write_judgement("RUNIN_01", judged_snapshot)
+
+        self.assertEqual(len(written), 1)
+        self.assertEqual(self.worker.driver.read_words(1006, 1)[0], 1)
+        self.assertEqual(self.worker.driver.read_words(1060, 1)[0], 0)
+        self.assertEqual(self.worker.driver.read_words(1005, 1)[0], 0)
+        self.assertEqual(self.worker.driver.read_words(1007, 1)[0], 17002)
 
     def test_clears_stale_read_complete_bit_while_idle(self) -> None:
         self.worker.driver.connect()

@@ -1,0 +1,41 @@
+{
+  "models": {
+    "C68": {
+      "sn_prefixes": [
+        "C68"
+      ],
+      "configured": false,
+      "rule_version": "待确认",
+      "description": "请填写现场确认后的原始PLC整数上下限；上下限均包含边界值。",
+      "ranges": {
+        "runin_speed_rpm": {
+          "label": "转速",
+          "unit": "r/min",
+          "min": null,
+          "max": null
+        },
+        "runin_voltage_v": {
+          "label": "电压",
+          "unit": "PLC原始值",
+          "min": null,
+          "max": null
+        },
+        "runin_temperature_c": {
+          "label": "温度",
+          "unit": "PLC原始值",
+          "min": null,
+          "max": null
+        },
+        "runin_current_a": {
+          "label": "电流",
+          "unit": "PLC原始值",
+          "min": null,
+          "max": null
+        }
+      },
+      "allowed_error_codes": [
+        0
+      ]
+    }
+  }
+}

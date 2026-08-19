@@ -6,7 +6,13 @@ from typing import Any, Dict
 
 
 class ConfigService:
-    CONFIG_NAMES = ("app", "devices", "process", "server")
+    CONFIG_NAMES = (
+        "app",
+        "devices",
+        "process",
+        "server",
+        "quality_rules",
+    )
 
     def __init__(self, config_dir: Path) -> None:
         self.config_dir = Path(config_dir)

@@ -11,6 +11,7 @@ class ConfigServiceTests(unittest.TestCase):
         config = ConfigService(config_dir).load_all()
         self.assertEqual(set(config), set(ConfigService.CONFIG_NAMES))
         self.assertIn("application", config["app"])
+        self.assertIn("C68", config["quality_rules"]["models"])
 
     def test_unknown_config_name_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from services.config_service import ConfigService
+from services.quality_rule_service import QualityRuleService
 from services.serial_number_service import SerialNumberError, SerialNumberService
 from services.traceability_service import TraceabilityService
 from services.tray_mapping_sync_service import TrayMappingSyncService
@@ -45,6 +46,7 @@ class MainWindow(QMainWindow):
     mapping_sync_failed = Signal(str, str, str)
     mapping_sync_finished = Signal()
     runin_result_processed = Signal(str, bool)
+    runin_judgement_requested = Signal(str, dict)
 
     def __init__(
         self,
@@ -54,6 +56,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = CONFIG.load_all()
         self.serial_number_service = SerialNumberService()
+        self.quality_rule_service = QualityRuleService(
+            self.config["quality_rules"]
+        )
         traceability_config = self.config["server"].get("traceability", {})
         configured_database_path = Path(
             str(traceability_config.get("database_path", "data/traceability.db"))
@@ -456,11 +461,18 @@ QTabBar::tab:selected {
             worker.connection_changed.connect(self._set_runin_connection)
             worker.live_snapshot.connect(self._on_runin_live_snapshot)
             worker.result_ready.connect(self._on_runin_result_ready)
+            worker.judgement_written.connect(
+                self._on_runin_judgement_written
+            )
+            worker.judgement_write_failed.connect(
+                self._on_runin_judgement_write_failed
+            )
             worker.log.connect(self.append_log)
             worker.finished.connect(thread.quit)
             self.runin_result_processed.connect(
                 worker.handle_result_processed
             )
+            self.runin_judgement_requested.connect(worker.write_judgement)
             self.runin_threads[device_id] = thread
             self.runin_workers[device_id] = worker
             self._set_runin_connection(
@@ -867,24 +879,67 @@ QTabBar::tab:selected {
     def _on_runin_result_ready(
         self, device_id: str, snapshot: Dict[str, Any]
     ) -> None:
-        """显示、关联并保存一盘10个产品结果，成功后通知PLC放行。"""
+        """关联SN并按型号判定，随后请求PLC线程写回判定结果。"""
         device_id = str(device_id)
-        self.runin_snapshots[device_id] = dict(snapshot)
         selected_index = self.resultDeviceCombo.findData(device_id)
         if selected_index >= 0:
             self.resultDeviceCombo.setCurrentIndex(selected_index)
         tray_id = str(snapshot.get("tray_id", "")).strip()
         raw_items = [dict(item) for item in snapshot.get("items", [])]
-        self.runinResultWidget.set_results(raw_items)
         self.runinTrayLabel.setText(f"当前卸载托盘：{tray_id or '--'}")
-        self.runinResultStateLabel.setText("正在匹配 SN 并保存本地数据…")
+        self.runinResultStateLabel.setText("正在匹配SN并执行上位机判定…")
         self.runinResultStateLabel.setStyleSheet("color: #627d98;")
 
         try:
+            judged_items = self._resolve_and_judge_runin_items(
+                tray_id, raw_items, strict=True
+            )
+        except Exception as error:
+            self.runinResultWidget.set_results(raw_items)
+            self.runinResultStateLabel.setText(f"判定失败：{error}")
+            self.runinResultStateLabel.setStyleSheet(
+                "color: #b42334; font-weight: 700;"
+            )
+            self.append_log(
+                f"{snapshot.get('device_name', device_id)} 托盘 {tray_id} "
+                f"未执行上位机判定：{error}"
+            )
+            self.runin_result_processed.emit(device_id, False)
+            return
+
+        judged_snapshot = dict(snapshot)
+        judged_snapshot["items"] = judged_items
+        self.runin_snapshots[device_id] = judged_snapshot
+        self.runinResultWidget.set_results(judged_items)
+        passed_count = sum(bool(item["runin_passed"]) for item in judged_items)
+        models = sorted(
+            {str(item.get("product_model", "")) for item in judged_items}
+        )
+        self.runinResultStateLabel.setText(
+            f"上位机判定完成：合格 {passed_count}，不合格 "
+            f"{10 - passed_count}，正在写入PLC…"
+        )
+        self.runinResultStateLabel.setStyleSheet(
+            "color: #a15c00; font-weight: 700;"
+        )
+        self.append_log(
+            f"{snapshot.get('device_name', device_id)} 托盘 {tray_id} "
+            f"已按SN识别型号 {','.join(models)} 并完成上位机判定，"
+            "正在写回PLC合格标志。"
+        )
+        self.runin_judgement_requested.emit(device_id, judged_snapshot)
+
+    def _on_runin_judgement_written(
+        self, device_id: str, snapshot: Dict[str, Any]
+    ) -> None:
+        """PLC判定位写入并校验成功后，原子保存一盘结果。"""
+        device_id = str(device_id)
+        tray_id = str(snapshot.get("tray_id", "")).strip()
+        judged_items = [dict(item) for item in snapshot.get("items", [])]
+        self.runinResultStateLabel.setText("判定已写入PLC，正在保存本地数据…")
+        try:
             records = self.traceability_service.save_runin_tray_results(
-                tray_id,
-                device_id,
-                raw_items,
+                tray_id, device_id, judged_items
             )
         except Exception as error:
             self.runinResultStateLabel.setText(f"保存失败：{error}")
@@ -914,6 +969,40 @@ QTabBar::tab:selected {
         )
         self.runin_result_processed.emit(device_id, True)
 
+    def _on_runin_judgement_write_failed(
+        self, device_id: str, message: str
+    ) -> None:
+        if str(self.resultDeviceCombo.currentData() or "") == str(device_id):
+            self.runinResultStateLabel.setText(f"判定写入PLC失败：{message}")
+            self.runinResultStateLabel.setStyleSheet(
+                "color: #b42334; font-weight: 700;"
+            )
+
+    def _resolve_and_judge_runin_items(
+        self,
+        tray_id: str,
+        items: Sequence[Dict[str, Any]],
+        *,
+        strict: bool,
+    ) -> List[Dict[str, Any]]:
+        judged_items: List[Dict[str, Any]] = []
+        for source in items:
+            item = dict(source)
+            try:
+                product = self.traceability_service.resolve_product(
+                    tray_id, int(item.get("tray_slot", 0))
+                )
+                item["product_sn"] = product["product_sn"]
+                item = self.quality_rule_service.evaluate_item(item)
+            except Exception as error:
+                if strict:
+                    raise
+                item["runin_passed"] = None
+                item["runin_result_code"] = None
+                item["quality_error"] = str(error)
+            judged_items.append(item)
+        return judged_items
+
     def _on_runin_live_snapshot(
         self, device_id: str, snapshot: Dict[str, Any]
     ) -> None:
@@ -921,16 +1010,11 @@ QTabBar::tab:selected {
         device_id = str(device_id)
         display_snapshot = dict(snapshot)
         tray_id = str(display_snapshot.get("tray_id", "")).strip()
-        display_items = [dict(item) for item in snapshot.get("items", [])]
-        if tray_id:
-            for item in display_items:
-                try:
-                    product = self.traceability_service.resolve_product(
-                        tray_id, int(item.get("tray_slot", 0))
-                    )
-                except Exception:
-                    continue
-                item["product_sn"] = product["product_sn"]
+        display_items = self._resolve_and_judge_runin_items(
+            tray_id,
+            [dict(item) for item in snapshot.get("items", [])],
+            strict=False,
+        )
         display_snapshot["items"] = display_items
         display_snapshot["received_at"] = datetime.now().strftime("%H:%M:%S")
         self.runin_live_snapshots[device_id] = display_snapshot

@@ -11,6 +11,26 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from main import MainWindow
+from services.quality_rule_service import QualityRuleService
+
+
+def configured_test_rules():
+    return {
+        "models": {
+            "C66": {
+                "sn_prefixes": ["C66"],
+                "configured": True,
+                "rule_version": "test-1",
+                "ranges": {
+                    "runin_speed_rpm": {"min": 16000, "max": 18000},
+                    "runin_voltage_v": {"min": 190, "max": 220},
+                    "runin_temperature_c": {"min": 30, "max": 60},
+                    "runin_current_a": {"min": 90, "max": 120},
+                },
+                "allowed_error_codes": [0],
+            }
+        }
+    }
 
 
 class MainWindowSerialEntryTests(unittest.TestCase):
@@ -22,6 +42,9 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         database_path = Path(self.temporary_directory.name) / "traceability.db"
         self.window = MainWindow(start_plc=False, database_path=database_path)
+        self.window.quality_rule_service = QualityRuleService(
+            configured_test_rules()
+        )
         self.window.mapping_sync_timer.stop()
         self.window.mapping_sync_service.config["enabled"] = False
         self.window.show()
@@ -203,7 +226,13 @@ class MainWindowSerialEntryTests(unittest.TestCase):
             ],
         }
 
+        write_requests = []
+        self.window.runin_judgement_requested.connect(
+            lambda device_id, data: write_requests.append((device_id, data))
+        )
         self.window._on_runin_result_ready("RUNIN_01", snapshot)
+        self.assertEqual(len(write_requests), 1)
+        self.window._on_runin_judgement_written(*write_requests[0])
 
         self.assertIn(
             "C66HNI042665", self.window.runinResultWidget.sn_labels[0].text()
@@ -241,10 +270,15 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         value_text = self.window.runinResultWidget.value_labels[0].text()
         self.assertIn("n 17001  U 201", value_text)
         self.assertIn("T 41  I 101  E 0", value_text)
-        self.assertIn("--", self.window.runinResultWidget.value_labels[0].text())
+        self.assertIn(
+            "未判定", self.window.runinResultWidget.value_labels[0].text()
+        )
         self.assertIn("D3502.00/.01：0/0", self.window.runinHandshakeLabel.text())
 
-    def test_runin_live_snapshot_displays_invalid_passed_raw_value(self) -> None:
+    def test_live_snapshot_ignores_old_plc_passed_and_uses_upper_rule(self) -> None:
+        self.window.traceability_service.save_tray_batch(
+            "7001", [f"C66SN{slot:02d}" for slot in range(1, 11)]
+        )
         snapshot = {
             "device_id": "RUNIN_01",
             "device_name": "跑合设备 1",
@@ -254,12 +288,12 @@ class MainWindowSerialEntryTests(unittest.TestCase):
             "items": [
                 {
                     "tray_slot": 1,
-                    "runin_speed_rpm": 21696,
-                    "runin_voltage_v": 234,
-                    "runin_temperature_c": 57,
-                    "runin_current_a": 185,
-                    "runin_error_code": 1,
-                    "runin_passed_raw": 20,
+                    "runin_speed_rpm": 17001,
+                    "runin_voltage_v": 201,
+                    "runin_temperature_c": 41,
+                    "runin_current_a": 101,
+                    "runin_error_code": 0,
+                    "plc_passed_raw": 20,
                     "runin_passed": None,
                 }
             ],
@@ -267,9 +301,7 @@ class MainWindowSerialEntryTests(unittest.TestCase):
 
         self.window._on_runin_live_snapshot("RUNIN_01", snapshot)
 
-        self.assertIn(
-            "异常(20)", self.window.runinResultWidget.value_labels[0].text()
-        )
+        self.assertIn("OK", self.window.runinResultWidget.value_labels[0].text())
         self.assertIn("实时预览中", self.window.runinResultStateLabel.text())
 
     def test_runin_address_label_follows_device_configuration(self) -> None:

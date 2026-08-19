@@ -79,7 +79,6 @@ class RuninPlcDriver(FinsPlcDriver):
         return self._parse_snapshot(
             tray_id,
             words,
-            strict_passed=False,
             data_ready=bool(handshake_word & (1 << self.data_ready_bit)),
             handshake_word=handshake_word,
         )
@@ -99,7 +98,6 @@ class RuninPlcDriver(FinsPlcDriver):
         return self._parse_snapshot(
             tray_id,
             words,
-            strict_passed=True,
             data_ready=True,
             handshake_word=1 << self.data_ready_bit,
         )
@@ -109,11 +107,10 @@ class RuninPlcDriver(FinsPlcDriver):
         tray_id: str,
         words: List[int],
         *,
-        strict_passed: bool,
         data_ready: bool,
         handshake_word: int,
     ) -> Dict[str, Any]:
-        """将60个连续INT字解析为10个产品；预览允许合格位尚未生成。"""
+        """解析10个产品原始值；原PLC合格位仅保留作诊断。"""
 
         items: List[Dict[str, Any]] = []
         for slot in range(1, self.products_per_tray + 1):
@@ -123,14 +120,6 @@ class RuninPlcDriver(FinsPlcDriver):
                 for value in words[start : start + self.words_per_product]
             ]
             raw_values = dict(zip(self.plc_field_order, values))
-            passed = raw_values["runin_passed"]
-            if strict_passed and passed not in (0, 1):
-                raise FinsProtocolError(
-                    f"托盘 {tray_id} 坑位 {slot} 合格值必须为 0 或 1，实际 {passed}"
-                )
-            # 合格标志也需要像其他测量值一样实时预览；握手位只控制
-            # 是否允许正式保存，不应控制界面是否显示 PLC 当前值。
-            passed_value = bool(passed) if passed in (0, 1) else None
             items.append(
                 {
                     "tray_slot": slot,
@@ -141,11 +130,10 @@ class RuninPlcDriver(FinsPlcDriver):
                     ],
                     "runin_current_a": raw_values["runin_current_a"],
                     "runin_error_code": raw_values["runin_error_code"],
-                    "runin_passed_raw": passed,
-                    "runin_passed": passed_value,
-                    "runin_result_code": (
-                        0 if passed_value else 1
-                    ) if passed_value is not None else None,
+                    "plc_passed_raw": raw_values["runin_passed"],
+                    "runin_passed": None,
+                    "runin_result_code": None,
+                    "judgement_source": None,
                 }
             )
         return {
@@ -164,6 +152,33 @@ class RuninPlcDriver(FinsPlcDriver):
             "handshake_word": int(handshake_word) & 0xFFFF,
             "items": items,
         }
+
+    def write_pass_results(self, items: Iterable[Dict[str, Any]]) -> None:
+        """将上位机判定的10个0/1写入原PLC合格标志位置并回读校验。"""
+        normalized = [dict(item) for item in items]
+        slots = sorted(int(item.get("tray_slot", 0)) for item in normalized)
+        if slots != list(range(1, self.products_per_tray + 1)):
+            raise ValueError("写入合格标志必须完整包含坑位 1～10")
+
+        passed_offset = self.plc_field_order.index("runin_passed")
+        for item in normalized:
+            slot = int(item["tray_slot"])
+            passed = item.get("runin_passed")
+            if not isinstance(passed, bool):
+                raise ValueError(f"坑位 {slot} 上位机合格结果必须是 bool")
+            address = (
+                self.result_base_address
+                + (slot - 1) * self.words_per_product
+                + passed_offset
+            )
+            expected = 1 if passed else 0
+            self.write_words(address, [expected])
+            actual = self.read_words(address, 1)[0]
+            if actual != expected:
+                raise FinsProtocolError(
+                    f"坑位 {slot} 合格结果写入校验失败："
+                    f"D{address} 期望 {expected}，实际 {actual}"
+                )
 
     def write_read_complete(self, completed: bool) -> None:
         self._require_connection()

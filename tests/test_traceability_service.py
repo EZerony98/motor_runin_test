@@ -164,6 +164,10 @@ class TraceabilityServiceTests(unittest.TestCase):
                 "runin_passed": True,
                 "runin_result_code": "OK",
                 "runin_error_code": 0,
+                "product_model": "C68",
+                "quality_rule_version": "test-1",
+                "judgement_source": "upper_computer",
+                "quality_failures": [],
             },
         )
 
@@ -188,6 +192,12 @@ class TraceabilityServiceTests(unittest.TestCase):
                 "runin_passed": slot != 5,
                 "runin_result_code": 0 if slot != 5 else 1,
                 "runin_error_code": 0 if slot != 5 else 105,
+                "product_model": "C68",
+                "quality_rule_version": "test-1",
+                "judgement_source": "upper_computer",
+                "quality_failures": (
+                    [] if slot != 5 else ["报警码105不在允许值[0]内"]
+                ),
             }
             for slot in range(1, 11)
         ]
@@ -201,6 +211,10 @@ class TraceabilityServiceTests(unittest.TestCase):
         self.assertEqual(records[-1]["product_sn"], "SN10")
         self.assertFalse(records[4]["runin_passed"])
         self.assertEqual(records[4]["runin_error_code"], 105)
+        self.assertEqual(records[4]["product_model"], "C68")
+        self.assertEqual(
+            records[4]["judgement_source"], "upper_computer"
+        )
         runin_uploads = [
             item
             for item in self.service.pending_uploads(limit=20)
