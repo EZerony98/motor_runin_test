@@ -55,7 +55,7 @@
     {
       "id": "RUNIN_02",
       "name": "跑合设备 2",
-      "enabled": false,
+      "enabled": true,
       "driver": "fins",
       "host": "192.168.250.4",
       "port": 9600,
