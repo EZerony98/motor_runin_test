@@ -2,39 +2,269 @@
   "models": {
     "C68": {
       "sn_prefixes": [
-        "C68"
+        "C68",
+        "M91H"
       ],
-      "configured": false,
-      "rule_version": "待确认",
-      "description": "请填写现场确认后的原始PLC整数上下限；上下限均包含边界值。",
+      "configured": true,
+      "rule_version": "2026-08-19-01",
+      "description": "C68跑合合格标准；数值为上位机换算后的实际工程量，上下限均包含边界值。",
       "ranges": {
         "runin_speed_rpm": {
           "label": "转速",
           "unit": "r/min",
-          "min": null,
-          "max": null
+          "min": 36000,
+          "max": 45000
         },
         "runin_voltage_v": {
           "label": "电压",
-          "unit": "PLC原始值",
-          "min": null,
-          "max": null
+          "unit": "V",
+          "min": 23.5,
+          "max": 24.5
         },
         "runin_temperature_c": {
           "label": "温度",
-          "unit": "PLC原始值",
-          "min": null,
-          "max": null
+          "unit": "℃",
+          "min": 0,
+          "max": 80
         },
         "runin_current_a": {
           "label": "电流",
-          "unit": "PLC原始值",
-          "min": null,
-          "max": null
+          "unit": "mA",
+          "min": 100,
+          "max": 400
         }
       },
       "allowed_error_codes": [
-        0
+        0,
+        1
+      ]
+    },
+    "46520-24-43000": {
+      "sn_prefixes": [
+        "46520-24-43000"
+      ],
+      "configured": true,
+      "rule_version": "2026-08-19-temp-01",
+      "description": "临时沿用C68跑合标准；请确认SN前缀和型号专用范围。",
+      "ranges": {
+        "runin_speed_rpm": {
+          "label": "转速",
+          "unit": "r/min",
+          "min": 36000,
+          "max": 45000
+        },
+        "runin_voltage_v": {
+          "label": "电压",
+          "unit": "V",
+          "min": 23.5,
+          "max": 24.5
+        },
+        "runin_temperature_c": {
+          "label": "温度",
+          "unit": "℃",
+          "min": 0,
+          "max": 80
+        },
+        "runin_current_a": {
+          "label": "电流",
+          "unit": "mA",
+          "min": 100,
+          "max": 400
+        }
+      },
+      "allowed_error_codes": [
+        0,
+        1
+      ]
+    },
+    "38230-24-60000": {
+      "sn_prefixes": [
+        "38230-24-60000"
+      ],
+      "configured": true,
+      "rule_version": "2026-08-19-temp-01",
+      "description": "临时沿用C68跑合标准；请确认SN前缀和型号专用范围。",
+      "ranges": {
+        "runin_speed_rpm": {
+          "label": "转速",
+          "unit": "r/min",
+          "min": 36000,
+          "max": 45000
+        },
+        "runin_voltage_v": {
+          "label": "电压",
+          "unit": "V",
+          "min": 23.5,
+          "max": 24.5
+        },
+        "runin_temperature_c": {
+          "label": "温度",
+          "unit": "℃",
+          "min": 0,
+          "max": 80
+        },
+        "runin_current_a": {
+          "label": "电流",
+          "unit": "mA",
+          "min": 100,
+          "max": 400
+        }
+      },
+      "allowed_error_codes": [
+        0,
+        1
+      ]
+    },
+    "52232-24-430": {
+      "sn_prefixes": [
+        "52232-24-430"
+      ],
+      "configured": true,
+      "rule_version": "2026-08-19-temp-01",
+      "description": "临时沿用C68跑合标准；请确认SN前缀和型号专用范围。",
+      "ranges": {
+        "runin_speed_rpm": {
+          "label": "转速",
+          "unit": "r/min",
+          "min": 36000,
+          "max": 45000
+        },
+        "runin_voltage_v": {
+          "label": "电压",
+          "unit": "V",
+          "min": 23.5,
+          "max": 24.5
+        },
+        "runin_temperature_c": {
+          "label": "温度",
+          "unit": "℃",
+          "min": 0,
+          "max": 80
+        },
+        "runin_current_a": {
+          "label": "电流",
+          "unit": "mA",
+          "min": 100,
+          "max": 400
+        }
+      },
+      "allowed_error_codes": [
+        0,
+        1
+      ]
+    },
+    "40S18-24-500-C080": {
+      "sn_prefixes": [
+        "40S18-24-500-C080"
+      ],
+      "configured": true,
+      "rule_version": "2026-08-19-temp-01",
+      "description": "临时沿用C68跑合标准；请确认SN前缀和型号专用范围。",
+      "ranges": {
+        "runin_speed_rpm": {
+          "label": "转速",
+          "unit": "r/min",
+          "min": 36000,
+          "max": 45000
+        },
+        "runin_voltage_v": {
+          "label": "电压",
+          "unit": "V",
+          "min": 23.5,
+          "max": 24.5
+        },
+        "runin_temperature_c": {
+          "label": "温度",
+          "unit": "℃",
+          "min": 0,
+          "max": 80
+        },
+        "runin_current_a": {
+          "label": "电流",
+          "unit": "mA",
+          "min": 100,
+          "max": 400
+        }
+      },
+      "allowed_error_codes": [
+        0,
+        1
+      ]
+    },
+    "52237-24-500": {
+      "sn_prefixes": [
+        "52237-24-500"
+      ],
+      "configured": true,
+      "rule_version": "2026-08-19-temp-01",
+      "description": "临时沿用C68跑合标准；请确认SN前缀和型号专用范围。",
+      "ranges": {
+        "runin_speed_rpm": {
+          "label": "转速",
+          "unit": "r/min",
+          "min": 36000,
+          "max": 45000
+        },
+        "runin_voltage_v": {
+          "label": "电压",
+          "unit": "V",
+          "min": 23.5,
+          "max": 24.5
+        },
+        "runin_temperature_c": {
+          "label": "温度",
+          "unit": "℃",
+          "min": 0,
+          "max": 80
+        },
+        "runin_current_a": {
+          "label": "电流",
+          "unit": "mA",
+          "min": 100,
+          "max": 400
+        }
+      },
+      "allowed_error_codes": [
+        0,
+        1
+      ]
+    },
+    "52237-24-540": {
+      "sn_prefixes": [
+        "52237-24-540"
+      ],
+      "configured": true,
+      "rule_version": "2026-08-19-temp-01",
+      "description": "临时沿用C68跑合标准；请确认SN前缀和型号专用范围。",
+      "ranges": {
+        "runin_speed_rpm": {
+          "label": "转速",
+          "unit": "r/min",
+          "min": 36000,
+          "max": 45000
+        },
+        "runin_voltage_v": {
+          "label": "电压",
+          "unit": "V",
+          "min": 23.5,
+          "max": 24.5
+        },
+        "runin_temperature_c": {
+          "label": "温度",
+          "unit": "℃",
+          "min": 0,
+          "max": 80
+        },
+        "runin_current_a": {
+          "label": "电流",
+          "unit": "mA",
+          "min": 100,
+          "max": 400
+        }
+      },
+      "allowed_error_codes": [
+        0,
+        1
       ]
     }
   }

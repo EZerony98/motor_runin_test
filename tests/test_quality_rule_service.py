@@ -12,19 +12,19 @@ def configured_rules():
                 "rule_version": "2026-08-19-01",
                 "ranges": {
                     "runin_speed_rpm": {
-                        "label": "转速", "min": 21000, "max": 22000
+                        "label": "转速", "min": 36000, "max": 45000
                     },
                     "runin_voltage_v": {
-                        "label": "电压", "min": 220, "max": 240
+                        "label": "电压", "min": 23.5, "max": 24.5
                     },
                     "runin_temperature_c": {
                         "label": "温度", "min": 20, "max": 70
                     },
                     "runin_current_a": {
-                        "label": "电流", "min": 170, "max": 220
+                        "label": "电流", "min": 100, "max": 400
                     },
                 },
-                "allowed_error_codes": [0],
+                "allowed_error_codes": [0, 1],
             }
         }
     }
@@ -34,8 +34,8 @@ def measurement(**overrides):
     result = {
         "tray_slot": 1,
         "product_sn": "C68HNI042665",
-        "runin_speed_rpm": 21696,
-        "runin_voltage_v": 234,
+        "runin_speed_rpm": 43392,
+        "runin_voltage_v": 23.4,
         "runin_temperature_c": 57,
         "runin_current_a": 185,
         "runin_error_code": 0,
@@ -48,18 +48,41 @@ class QualityRuleServiceTests(unittest.TestCase):
     def test_sn_prefix_selects_c68_and_passes_inclusive_ranges(self) -> None:
         service = QualityRuleService(configured_rules())
 
-        result = service.evaluate_item(measurement(runin_speed_rpm=21000))
+        result = service.evaluate_item(
+            measurement(runin_speed_rpm=36000, runin_voltage_v=23.5)
+        )
 
         self.assertTrue(result["runin_passed"])
         self.assertEqual(result["product_model"], "C68")
         self.assertEqual(result["quality_rule_version"], "2026-08-19-01")
         self.assertEqual(result["judgement_source"], "upper_computer")
 
+    def test_error_codes_zero_and_one_are_both_ok(self) -> None:
+        service = QualityRuleService(configured_rules())
+
+        for error_code in (0, 1):
+            result = service.evaluate_item(
+                measurement(runin_voltage_v=24.0, runin_error_code=error_code)
+            )
+            self.assertTrue(result["runin_passed"])
+
+    def test_m91h_prefix_can_share_c68_rules(self) -> None:
+        rules = configured_rules()
+        rules["models"]["C68"]["sn_prefixes"].append("M91H")
+        service = QualityRuleService(rules)
+
+        result = service.evaluate_item(
+            measurement(product_sn="M91H0H0732304", runin_voltage_v=24.0)
+        )
+
+        self.assertEqual(result["product_model"], "C68")
+        self.assertTrue(result["runin_passed"])
+
     def test_out_of_range_or_alarm_is_ng_with_reasons(self) -> None:
         service = QualityRuleService(configured_rules())
 
         result = service.evaluate_item(
-            measurement(runin_voltage_v=250, runin_error_code=7)
+            measurement(runin_voltage_v=25.0, runin_error_code=7)
         )
 
         self.assertFalse(result["runin_passed"])

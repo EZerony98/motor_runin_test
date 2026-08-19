@@ -53,8 +53,8 @@ def configured_rules():
                 "configured": True,
                 "rule_version": "test-1",
                 "ranges": {
-                    "runin_speed_rpm": {"min": 16000, "max": 22000},
-                    "runin_voltage_v": {"min": 190, "max": 220},
+                    "runin_speed_rpm": {"min": 32000, "max": 44000},
+                    "runin_voltage_v": {"min": 19, "max": 22},
                     "runin_temperature_c": {"min": 30, "max": 60},
                     "runin_current_a": {"min": 90, "max": 120},
                 },
@@ -80,10 +80,10 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(snapshot["tray_id"], "7001")
         self.assertEqual(len(snapshot["items"]), 10)
         self.assertEqual(snapshot["items"][0]["runin_current_a"], 101)
-        self.assertEqual(snapshot["items"][0]["runin_speed_rpm"], 17001)
-        self.assertEqual(snapshot["items"][0]["runin_voltage_v"], 201)
+        self.assertEqual(snapshot["items"][0]["runin_speed_rpm"], 34002)
+        self.assertEqual(snapshot["items"][0]["runin_voltage_v"], 20.1)
         self.assertEqual(snapshot["items"][0]["runin_temperature_c"], 41)
-        self.assertEqual(snapshot["items"][9]["runin_voltage_v"], 210)
+        self.assertEqual(snapshot["items"][9]["runin_voltage_v"], 21.0)
         self.assertIsNone(snapshot["items"][9]["runin_passed"])
         self.assertEqual(snapshot["items"][9]["plc_passed_raw"], 0)
         self.assertEqual(snapshot["items"][9]["runin_error_code"], 105)
@@ -99,7 +99,7 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(snapshot["tray_id"], "7001")
         self.assertFalse(snapshot["data_ready"])
         self.assertEqual(snapshot["items"][0]["runin_current_a"], 101)
-        self.assertEqual(snapshot["items"][9]["runin_speed_rpm"], 17010)
+        self.assertEqual(snapshot["items"][9]["runin_speed_rpm"], 34020)
         self.assertIsNone(snapshot["items"][0]["runin_passed"])
         self.assertEqual(snapshot["items"][0]["plc_passed_raw"], 1)
 
@@ -153,8 +153,8 @@ class RuninPlcDriverTests(unittest.TestCase):
             )
 
         first = records[0]
-        self.assertEqual(first["runin_speed_rpm"], 21696)
-        self.assertEqual(first["runin_voltage_v"], 210)
+        self.assertEqual(first["runin_speed_rpm"], 43392)
+        self.assertEqual(first["runin_voltage_v"], 21.0)
         self.assertEqual(first["runin_temperature_c"], 34)
         self.assertEqual(first["runin_current_a"], 108)
         self.assertEqual(first["runin_error_code"], 0)
@@ -181,8 +181,8 @@ class RuninPlcDriverTests(unittest.TestCase):
         finally:
             driver.disconnect()
 
-        self.assertEqual(item["runin_speed_rpm"], 21384)
-        self.assertEqual(item["runin_voltage_v"], 20)
+        self.assertEqual(item["runin_speed_rpm"], 42768)
+        self.assertEqual(item["runin_voltage_v"], 2.0)
         self.assertEqual(item["runin_temperature_c"], -41)
         self.assertEqual(item["runin_current_a"], 234)
 
@@ -259,7 +259,7 @@ class RuninPlcWorkerTests(unittest.TestCase):
         self.assertEqual(received[0][0], "RUNIN_01")
         self.assertFalse(received[0][1]["data_ready"])
         self.assertEqual(
-            received[0][1]["items"][0]["runin_voltage_v"], 201
+            received[0][1]["items"][0]["runin_voltage_v"], 20.1
         )
         self.assertTrue(any("D3502.00=0" in message for message in logs))
 

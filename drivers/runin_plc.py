@@ -24,6 +24,14 @@ class RuninPlcDriver(FinsPlcDriver):
         "runin_error_code",
         "runin_passed",
     )
+    # PLC 以整数传输；进入上位机后统一换算为实际工程量。界面、判定、
+    # SQLite 和后续上传全部使用这里换算后的值。
+    MEASUREMENT_SCALES = {
+        "runin_speed_rpm": 2,
+        "runin_voltage_v": 0.1,
+        "runin_temperature_c": 1,
+        "runin_current_a": 1,
+    }
 
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
@@ -123,12 +131,19 @@ class RuninPlcDriver(FinsPlcDriver):
             items.append(
                 {
                     "tray_slot": slot,
-                    "runin_speed_rpm": raw_values["runin_speed_rpm"],
-                    "runin_voltage_v": raw_values["runin_voltage_v"],
-                    "runin_temperature_c": raw_values[
-                        "runin_temperature_c"
-                    ],
-                    "runin_current_a": raw_values["runin_current_a"],
+                    "runin_speed_rpm": self._engineering_value(
+                        "runin_speed_rpm", raw_values["runin_speed_rpm"]
+                    ),
+                    "runin_voltage_v": self._engineering_value(
+                        "runin_voltage_v", raw_values["runin_voltage_v"]
+                    ),
+                    "runin_temperature_c": self._engineering_value(
+                        "runin_temperature_c",
+                        raw_values["runin_temperature_c"],
+                    ),
+                    "runin_current_a": self._engineering_value(
+                        "runin_current_a", raw_values["runin_current_a"]
+                    ),
                     "runin_error_code": raw_values["runin_error_code"],
                     "plc_passed_raw": raw_values["runin_passed"],
                     "runin_passed": None,
@@ -152,6 +167,15 @@ class RuninPlcDriver(FinsPlcDriver):
             "handshake_word": int(handshake_word) & 0xFFFF,
             "items": items,
         }
+
+    @classmethod
+    def _engineering_value(cls, field: str, raw_value: int) -> Any:
+        scale = cls.MEASUREMENT_SCALES[field]
+        if scale == 1:
+            return raw_value
+        if isinstance(scale, int):
+            return raw_value * scale
+        return round(raw_value * scale, 6)
 
     def write_pass_results(self, items: Iterable[Dict[str, Any]]) -> None:
         """将上位机判定的10个0/1写入原PLC合格标志位置并回读校验。"""
