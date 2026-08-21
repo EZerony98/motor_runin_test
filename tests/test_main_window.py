@@ -211,6 +211,7 @@ class MainWindowSerialEntryTests(unittest.TestCase):
             "device_id": "RUNIN_01",
             "device_name": "跑合设备 1",
             "tray_id": "7001",
+            "result_sequence": 1,
             "items": [
                 {
                     "tray_slot": slot,
@@ -242,6 +243,98 @@ class MainWindowSerialEntryTests(unittest.TestCase):
         )
         self.assertIn("NG", self.window.runinResultWidget.value_labels[9].text())
         self.assertIn("已保存 10/10", self.window.runinResultStateLabel.text())
+
+    def test_new_sequence_for_same_tray_is_blocked_until_retest_approved(
+        self,
+    ) -> None:
+        self.window.traceability_service.save_tray_batch(
+            "7001", [f"C66SN{slot:02d}" for slot in range(1, 11)]
+        )
+
+        def snapshot(sequence):
+            return {
+                "device_id": "RUNIN_01",
+                "device_name": "跑合设备 1",
+                "tray_id": "7001",
+                "result_sequence": sequence,
+                "items": [
+                    {
+                        "tray_slot": slot,
+                        "runin_current_a": 100,
+                        "runin_voltage_v": 200,
+                        "runin_speed_rpm": 17000,
+                        "runin_temperature_c": 40,
+                        "runin_error_code": 0,
+                        "runin_passed": None,
+                    }
+                    for slot in range(1, 11)
+                ],
+            }
+
+        write_requests = []
+        self.window.runin_judgement_requested.connect(
+            lambda device_id, data: write_requests.append((device_id, data))
+        )
+        self.window._on_runin_result_ready("RUNIN_01", snapshot(1))
+        self.window._on_runin_judgement_written(*write_requests.pop())
+
+        self.window._on_runin_result_ready("RUNIN_01", snapshot(2))
+
+        self.assertEqual(write_requests, [])
+        self.assertIn("RUNIN_01", self.window.pending_runin_retests)
+        self.assertFalse(self.window.allowRetestButton.isHidden())
+        self.assertIn("已拦截", self.window.runinResultStateLabel.text())
+
+        self.window._confirm_retest = lambda _tray, _attempt: "测试复测"
+        self.window.allowRetestButton.click()
+
+        self.assertEqual(len(write_requests), 1)
+        self.window._on_runin_judgement_written(*write_requests[0])
+        with self.window.traceability_service._connect() as connection:
+            attempts = connection.execute(
+                "SELECT DISTINCT attempt_no FROM runin_results ORDER BY attempt_no"
+            ).fetchall()
+        self.assertEqual([row[0] for row in attempts], [1, 2])
+
+    def test_saved_sequence_replay_does_not_create_new_attempt(self) -> None:
+        self.window.traceability_service.save_tray_batch(
+            "7001", [f"C66SN{slot:02d}" for slot in range(1, 11)]
+        )
+        snapshot = {
+            "device_id": "RUNIN_01",
+            "device_name": "跑合设备 1",
+            "tray_id": "7001",
+            "result_sequence": 9,
+            "items": [
+                {
+                    "tray_slot": slot,
+                    "runin_current_a": 100,
+                    "runin_voltage_v": 200,
+                    "runin_speed_rpm": 17000,
+                    "runin_temperature_c": 40,
+                    "runin_error_code": 0,
+                    "runin_passed": None,
+                }
+                for slot in range(1, 11)
+            ],
+        }
+        requests = []
+        self.window.runin_judgement_requested.connect(
+            lambda device_id, data: requests.append((device_id, data))
+        )
+        self.window._on_runin_result_ready("RUNIN_01", snapshot)
+        self.window._on_runin_judgement_written(*requests.pop())
+
+        self.window._on_runin_result_ready("RUNIN_01", snapshot)
+
+        self.assertEqual(len(requests), 1)
+        self.assertTrue(requests[0][1]["event_replay"])
+        self.window._on_runin_judgement_written(*requests[0])
+        with self.window.traceability_service._connect() as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM runin_results"
+            ).fetchone()[0]
+        self.assertEqual(count, 10)
 
     def test_runin_live_snapshot_displays_without_saving(self) -> None:
         snapshot = {

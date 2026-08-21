@@ -49,7 +49,10 @@
         "words_per_product": 6,
         "handshake_address": 3502,
         "data_ready_bit": 0,
-        "read_complete_bit": 1
+        "read_complete_bit": 1,
+        "result_sequence_address": 3072,
+        "result_sequence_words": 2,
+        "result_sequence_word_order": "low_high"
       }
     },
     {
@@ -76,7 +79,10 @@
         "words_per_product": 6,
         "handshake_address": 3502,
         "data_ready_bit": 0,
-        "read_complete_bit": 1
+        "read_complete_bit": 1,
+        "result_sequence_address": 3072,
+        "result_sequence_words": 2,
+        "result_sequence_word_order": "low_high"
       }
     },
     {
@@ -103,7 +109,10 @@
         "words_per_product": 6,
         "handshake_address": 3502,
         "data_ready_bit": 0,
-        "read_complete_bit": 1
+        "read_complete_bit": 1,
+        "result_sequence_address": 3072,
+        "result_sequence_words": 2,
+        "result_sequence_word_order": "low_high"
       }
     },
     {
@@ -130,7 +139,10 @@
         "words_per_product": 6,
         "handshake_address": 3502,
         "data_ready_bit": 0,
-        "read_complete_bit": 1
+        "read_complete_bit": 1,
+        "result_sequence_address": 3072,
+        "result_sequence_words": 2,
+        "result_sequence_word_order": "low_high"
       }
     }
   ],

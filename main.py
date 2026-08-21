@@ -14,16 +14,19 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from services.config_service import ConfigService
+from services.mes_sync_service import MesSyncService
 from services.quality_rule_service import QualityRuleService
 from services.serial_number_service import SerialNumberError, SerialNumberService
 from services.traceability_service import TraceabilityService
@@ -47,6 +50,7 @@ class MainWindow(QMainWindow):
     mapping_sync_finished = Signal()
     runin_result_processed = Signal(str, bool)
     runin_judgement_requested = Signal(str, dict)
+    mes_sync_completed = Signal(dict)
 
     def __init__(
         self,
@@ -71,6 +75,8 @@ class MainWindow(QMainWindow):
         self.mapping_sync_service = TrayMappingSyncService(
             traceability_config.get("spectrum_peer", {})
         )
+        self.mes_sync_service = MesSyncService(self.config["server"])
+        self.mes_sync_running = False
         self.mapping_sync_running = False
         self.plc_thread: Optional[QThread] = None
         self.plc_worker: Optional[PlcWorker] = None
@@ -82,6 +88,8 @@ class MainWindow(QMainWindow):
         self.runin_snapshots: Dict[str, Dict[str, Any]] = {}
         self.runin_live_snapshots: Dict[str, Dict[str, Any]] = {}
         self.runin_records: Dict[str, List[Dict[str, Any]]] = {}
+        self.runin_connections: Dict[str, bool] = {}
+        self.pending_runin_retests: Dict[str, Dict[str, Any]] = {}
         self.plc_control_states = {
             "mode_auto": False,
             "reset": False,
@@ -123,6 +131,16 @@ class MainWindow(QMainWindow):
         if self.mapping_sync_service.enabled:
             self.mapping_sync_timer.start()
             QTimer.singleShot(0, self._sync_pending_tray_mappings)
+        self.mes_sync_timer = QTimer(self)
+        self.mes_sync_timer.setInterval(
+            max(5, int(self.config["server"].get("sync_interval_seconds", 10)))
+            * 1000
+        )
+        self.mes_sync_timer.timeout.connect(self._sync_mes)
+        self.mes_sync_completed.connect(self._on_mes_sync_completed)
+        if self.mes_sync_service.enabled:
+            self.mes_sync_timer.start()
+            QTimer.singleShot(0, self._sync_mes)
         self._configure_branding()
         self._configure_plc_status()
         if start_plc:
@@ -326,6 +344,15 @@ QTabBar::tab:selected {
         self.runinResultStateLabel = QLabel("等待跑合设备数据", result_tab)
         self.runinResultStateLabel.setStyleSheet("color: #627d98;")
         result_header.addWidget(self.runinResultStateLabel)
+        self.allowRetestButton = QPushButton("允许复测", result_tab)
+        self.allowRetestButton.setObjectName("allowRetestButton")
+        self.allowRetestButton.setStyleSheet(
+            "QPushButton { background: #d41432; color: white; "
+            "font-weight: 700; padding: 6px 14px; border-radius: 5px; }"
+        )
+        self.allowRetestButton.setVisible(False)
+        self.allowRetestButton.clicked.connect(self._allow_selected_retest)
+        result_header.addWidget(self.allowRetestButton)
         result_layout.addLayout(result_header)
         self.runinResultWidget = RuninResultWidget(result_tab)
         result_layout.addWidget(self.runinResultWidget, 1)
@@ -396,7 +423,9 @@ QTabBar::tab:selected {
             f"握手 D{handshake}.{ready_bit:02d}/.{complete_bit:02d}：--/--"
         )
         self.runinHandshakeLabel.setToolTip(
-            f"实时结果地址：D{result_base}–D{result_end}"
+            f"实时结果地址：D{result_base}–D{result_end}；"
+            f"流水号地址：D{int(self._runin_mapping(device_id).get('result_sequence_address', 3072))}–"
+            f"D{int(self._runin_mapping(device_id).get('result_sequence_address', 3072)) + 1}"
         )
 
     def _configure_branding(self) -> None:
@@ -485,6 +514,7 @@ QTabBar::tab:selected {
     def _set_runin_connection(
         self, device_id: str, connected: bool, message: str
     ) -> None:
+        self.runin_connections[str(device_id)] = bool(connected)
         label = self.runinStatusLabels.get(str(device_id))
         if label is None:
             return
@@ -521,6 +551,50 @@ QTabBar::tab:selected {
         label.setToolTip(
             f"{config.get('host', '')}:{config.get('port', 9600)}\n{message}"
         )
+
+    def _sync_mes(self) -> None:
+        if self.mes_sync_running or not self.mes_sync_service.enabled:
+            return
+        self.mes_sync_running = True
+        devices = [
+            {
+                "station_code": str(config.get("id", "")),
+                "connected": self.runin_connections.get(str(config.get("id", "")), False),
+                "metadata": {
+                    "configured_enabled": bool(config.get("enabled", False)),
+                    "plc_endpoint": f"{config.get('host', '')}:{config.get('port', 9600)}",
+                    "database_path": str(self.traceability_service.database_path),
+                },
+            }
+            for config in self.runin_plc_configs
+        ]
+        default_station_code = str(
+            self.config["server"].get("traceability", {}).get("station_code", "RUNIN_01")
+        )
+
+        def run_sync() -> None:
+            try:
+                report = self.mes_sync_service.sync_once(
+                    self.traceability_service,
+                    devices,
+                    default_station_code,
+                )
+            except Exception as error:
+                report = {"enabled": True, "uploaded": 0, "failed": 1, "last_error": str(error)}
+            self.mes_sync_completed.emit(report)
+
+        Thread(target=run_sync, name="runin-mes-sync", daemon=True).start()
+
+    def _on_mes_sync_completed(self, report: Dict[str, Any]) -> None:
+        self.mes_sync_running = False
+        uploaded = int(report.get("uploaded", 0))
+        failed = int(report.get("failed", 0))
+        if uploaded:
+            self.append_log(f"已向MES补传 {uploaded} 条本地追溯数据。")
+        if failed:
+            self.append_log(
+                f"MES同步失败，本地数据已保留待重试：{report.get('last_error', '')}"
+            )
 
     def _set_plc_connection(self, connected: bool, message: str) -> None:
         if connected:
@@ -886,11 +960,62 @@ QTabBar::tab:selected {
             self.resultDeviceCombo.setCurrentIndex(selected_index)
         tray_id = str(snapshot.get("tray_id", "")).strip()
         raw_items = [dict(item) for item in snapshot.get("items", [])]
+        result_sequence = int(snapshot.get("result_sequence", 0))
         self.runinTrayLabel.setText(f"当前卸载托盘：{tray_id or '--'}")
         self.runinResultStateLabel.setText("正在匹配SN并执行上位机判定…")
         self.runinResultStateLabel.setStyleSheet("color: #627d98;")
 
         try:
+            event = self.traceability_service.inspect_runin_event(
+                tray_id, device_id, result_sequence, raw_items
+            )
+            if event["status"] == "replay":
+                replay_snapshot = dict(snapshot)
+                replay_snapshot["items"] = event["records"]
+                replay_snapshot["event_replay"] = True
+                replay_snapshot["attempt_no"] = event["attempt_no"]
+                self.runin_snapshots[device_id] = replay_snapshot
+                self.runinResultWidget.set_results(event["records"])
+                self.runinResultStateLabel.setText(
+                    f"流水号 {result_sequence} 已保存，正在恢复PLC确认…"
+                )
+                self.runinResultStateLabel.setStyleSheet(
+                    "color: #137333; font-weight: 700;"
+                )
+                self.append_log(
+                    f"{snapshot.get('device_name', device_id)} 收到已保存的"
+                    f"流水号 {result_sequence}，按同一次事件重发处理，"
+                    "不新增、不覆盖记录。"
+                )
+                self.runin_judgement_requested.emit(
+                    device_id, replay_snapshot
+                )
+                return
+            if (
+                event["status"] == "retest_required"
+                and not bool(snapshot.get("allow_retest"))
+            ):
+                pending = dict(snapshot)
+                pending["attempt_no"] = event["attempt_no"]
+                self.pending_runin_retests[device_id] = pending
+                self.runinResultWidget.set_results(raw_items)
+                self.workspaceTabs.setCurrentIndex(1)
+                self.workspaceTabs.setTabText(1, "跑合数据 · 复测待确认")
+                self.runinResultStateLabel.setText(
+                    f"已拦截：托盘 {tray_id} 已跑合，流水号 "
+                    f"{result_sequence} 是第 {event['attempt_no']} 次测试"
+                )
+                self.runinResultStateLabel.setStyleSheet(
+                    "color: #b42334; font-weight: 700;"
+                )
+                self.allowRetestButton.setVisible(True)
+                self.allowRetestButton.setEnabled(True)
+                self.append_log(
+                    f"{snapshot.get('device_name', device_id)} 托盘 {tray_id} "
+                    f"收到新流水号 {result_sequence}，但当前批次已有跑合结果；"
+                    "已停止保存和PLC完成确认，等待操作员允许复测。"
+                )
+                return
             judged_items = self._resolve_and_judge_runin_items(
                 tray_id, raw_items, strict=True
             )
@@ -909,6 +1034,7 @@ QTabBar::tab:selected {
 
         judged_snapshot = dict(snapshot)
         judged_snapshot["items"] = judged_items
+        judged_snapshot["attempt_no"] = event["attempt_no"]
         self.runin_snapshots[device_id] = judged_snapshot
         self.runinResultWidget.set_results(judged_items)
         passed_count = sum(bool(item["runin_passed"]) for item in judged_items)
@@ -929,6 +1055,56 @@ QTabBar::tab:selected {
         )
         self.runin_judgement_requested.emit(device_id, judged_snapshot)
 
+    def _allow_selected_retest(self) -> None:
+        device_id = str(self.resultDeviceCombo.currentData() or "")
+        snapshot = self.pending_runin_retests.get(device_id)
+        if snapshot is None:
+            return
+        tray_id = str(snapshot.get("tray_id", "")).strip()
+        attempt_no = int(snapshot.get("attempt_no", 2))
+        reason = self._confirm_retest(tray_id, attempt_no)
+        if reason is None:
+            return
+        approved = dict(snapshot)
+        approved["allow_retest"] = True
+        approved["retest_reason"] = reason
+        approved["retest_operator"] = "现场操作员"
+        self.pending_runin_retests.pop(device_id, None)
+        self.allowRetestButton.setVisible(False)
+        self.append_log(
+            f"操作员已允许托盘 {tray_id} 保存为第 {attempt_no} 次跑合："
+            f"{reason}"
+        )
+        self._on_runin_result_ready(device_id, approved)
+
+    def _confirm_retest(
+        self, tray_id: str, attempt_no: int
+    ) -> Optional[str]:
+        reply = QMessageBox.question(
+            self,
+            "确认复测",
+            f"托盘 {tray_id} 当前批次已经保存过跑合结果。\n"
+            f"是否将本次数据保存为第 {attempt_no} 次跑合？\n"
+            "第一次结果将保留，不会被覆盖。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return None
+        reason, accepted = QInputDialog.getText(
+            self,
+            "复测原因",
+            "请输入复测原因：",
+            text="现场确认复测",
+        )
+        if not accepted:
+            return None
+        reason = str(reason).strip()
+        if not reason:
+            self._warn("复测原因不能为空")
+            return None
+        return reason
+
     def _on_runin_judgement_written(
         self, device_id: str, snapshot: Dict[str, Any]
     ) -> None:
@@ -939,7 +1115,13 @@ QTabBar::tab:selected {
         self.runinResultStateLabel.setText("判定已写入PLC，正在保存本地数据…")
         try:
             records = self.traceability_service.save_runin_tray_results(
-                tray_id, device_id, judged_items
+                tray_id,
+                device_id,
+                judged_items,
+                plc_sequence=int(snapshot.get("result_sequence", 0)),
+                allow_retest=bool(snapshot.get("allow_retest")),
+                retest_reason=str(snapshot.get("retest_reason", "")),
+                retest_operator=str(snapshot.get("retest_operator", "")),
             )
         except Exception as error:
             self.runinResultStateLabel.setText(f"保存失败：{error}")
@@ -954,6 +1136,9 @@ QTabBar::tab:selected {
             return
 
         self.runin_records[device_id] = records
+        self.pending_runin_retests.pop(device_id, None)
+        if str(self.resultDeviceCombo.currentData() or "") == device_id:
+            self.allowRetestButton.setVisible(False)
         self.runinResultWidget.set_results(records)
         passed_count = sum(bool(item["runin_passed"]) for item in records)
         self.runinResultStateLabel.setText(
@@ -965,8 +1150,10 @@ QTabBar::tab:selected {
         self.workspaceTabs.setTabText(1, f"跑合数据 · {tray_id}")
         self.append_log(
             f"{snapshot.get('device_name', device_id)} 托盘 {tray_id} 的 "
-            "10 个产品跑合数据已保存，向 PLC 写入读取完成确认。"
+            f"10 个产品第 {records[0].get('attempt_no', 1)} 次跑合数据已保存，"
+            "向 PLC 写入读取完成确认。"
         )
+        QTimer.singleShot(0, self._sync_mes)
         self.runin_result_processed.emit(device_id, True)
 
     def _on_runin_judgement_write_failed(
@@ -1030,16 +1217,29 @@ QTabBar::tab:selected {
         ready = bool(snapshot.get("data_ready", False))
         handshake_word = int(snapshot.get("handshake_word", 0))
         completed = bool(handshake_word & (1 << complete_bit))
+        result_sequence = int(snapshot.get("result_sequence", 0))
+        sequence_address = int(
+            snapshot.get(
+                "result_sequence_address",
+                self._runin_mapping(device_id).get(
+                    "result_sequence_address", 3072
+                ),
+            )
+        )
+        sequence_words = list(snapshot.get("result_sequence_words", []))
         received_at = str(snapshot.get("received_at", "--"))
         self.runinResultWidget.set_results(snapshot.get("items", []))
         self.runinTrayLabel.setText(f"当前 PLC 托盘：{tray_id or '--'}")
         self.runinHandshakeLabel.setText(
             f"握手 D{handshake}.{ready_bit:02d}/.{complete_bit:02d}："
             f"{1 if ready else 0}/"
-            f"{1 if completed else 0} · 更新 {received_at}"
+            f"{1 if completed else 0} · 流水 {result_sequence} · "
+            f"更新 {received_at}"
         )
         self.runinHandshakeLabel.setToolTip(
-            f"实时结果地址：D{result_base}–D{result_end}"
+            f"实时结果地址：D{result_base}–D{result_end}\n"
+            f"流水号地址：D{sequence_address}–D{sequence_address + 1}\n"
+            f"流水号原始双字：{sequence_words or '--'}"
         )
         self.runinHandshakeLabel.setStyleSheet(
             "color: #137333; font-weight: 700;"
@@ -1052,6 +1252,17 @@ QTabBar::tab:selected {
         saved_tray_id = (
             str(saved_records[0].get("tray_id", "")) if saved_records else ""
         )
+        pending = self.pending_runin_retests.get(device_id)
+        if pending is not None:
+            attempt_no = int(pending.get("attempt_no", 2))
+            self.runinResultStateLabel.setText(
+                f"重复跑合已拦截，等待允许第 {attempt_no} 次复测"
+            )
+            self.runinResultStateLabel.setStyleSheet(
+                "color: #b42334; font-weight: 700;"
+            )
+            self.allowRetestButton.setVisible(True)
+            return
         if tray_id and saved_tray_id == tray_id:
             return
         if ready:
@@ -1066,6 +1277,9 @@ QTabBar::tab:selected {
 
     def _display_selected_runin_result(self) -> None:
         device_id = str(self.resultDeviceCombo.currentData() or "")
+        self.allowRetestButton.setVisible(
+            device_id in self.pending_runin_retests
+        )
         self._update_runin_address_label()
         records = self.runin_records.get(device_id)
         snapshot = self.runin_snapshots.get(device_id)
@@ -1120,6 +1334,7 @@ QTabBar::tab:selected {
         self.ui.logOutput.appendPlainText(f"[{timestamp}] {message}")
 
     def closeEvent(self, event: object) -> None:
+        self.mes_sync_timer.stop()
         for device_id, worker in list(self.runin_workers.items()):
             thread = self.runin_threads.get(device_id)
             if thread is None or not thread.isRunning():

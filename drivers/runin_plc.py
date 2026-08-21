@@ -50,6 +50,15 @@ class RuninPlcDriver(FinsPlcDriver):
         self.handshake_address = int(mapping.get("handshake_address", 3502))
         self.data_ready_bit = int(mapping.get("data_ready_bit", 0))
         self.read_complete_bit = int(mapping.get("read_complete_bit", 1))
+        self.result_sequence_address = int(
+            mapping.get("result_sequence_address", 3072)
+        )
+        self.result_sequence_words = int(
+            mapping.get("result_sequence_words", 2)
+        )
+        self.result_sequence_word_order = str(
+            mapping.get("result_sequence_word_order", "low_high")
+        ).lower()
         self.plc_field_order = tuple(
             mapping.get("result_field_order", self.DEFAULT_PLC_FIELD_ORDER)
         )
@@ -64,6 +73,12 @@ class RuninPlcDriver(FinsPlcDriver):
             raise ValueError("跑合结果字段顺序必须完整包含6个标准字段且不能重复")
         if self.data_ready_bit == self.read_complete_bit:
             raise ValueError("数据就绪位和读取完成位不能相同")
+        if self.result_sequence_words != 2:
+            raise ValueError("跑合结果流水号当前必须配置为2个DM字")
+        if self.result_sequence_word_order not in {"low_high", "high_low"}:
+            raise ValueError(
+                "流水号字序必须是 low_high 或 high_low"
+            )
 
     @property
     def result_word_count(self) -> int:
@@ -72,6 +87,27 @@ class RuninPlcDriver(FinsPlcDriver):
     def _probe_connection(self) -> None:
         self.read_words(self.tray_id_address, 1)
         self.read_words(self.handshake_address, 1)
+        self.read_words(
+            self.result_sequence_address, self.result_sequence_words
+        )
+
+    def read_result_sequence(self) -> Dict[str, Any]:
+        """读取PLC双字结果流水号，并同时返回原始两个DM字便于诊断。"""
+        self._require_connection()
+        words = self.read_words(
+            self.result_sequence_address, self.result_sequence_words
+        )
+        first, second = (int(value) & 0xFFFF for value in words)
+        if self.result_sequence_word_order == "low_high":
+            value = first | (second << 16)
+        else:
+            value = (first << 16) | second
+        return {
+            "value": value,
+            "words": [first, second],
+            "address": self.result_sequence_address,
+            "word_order": self.result_sequence_word_order,
+        }
 
     def read_data_ready(self) -> bool:
         self._require_connection()
@@ -82,6 +118,7 @@ class RuninPlcDriver(FinsPlcDriver):
         """不依赖握手位，读取当前托盘号及实际产品区用于界面预览。"""
         self._require_connection()
         handshake_word = self.read_words(self.handshake_address, 1)[0]
+        sequence = self.read_result_sequence()
         tray_id = self.read_tray_id()
         words = self.read_words(self.result_base_address, self.result_word_count)
         return self._parse_snapshot(
@@ -89,6 +126,7 @@ class RuninPlcDriver(FinsPlcDriver):
             words,
             data_ready=bool(handshake_word & (1 << self.data_ready_bit)),
             handshake_word=handshake_word,
+            sequence=sequence,
         )
 
     def read_result_snapshot(self) -> Optional[Dict[str, Any]]:
@@ -96,10 +134,24 @@ class RuninPlcDriver(FinsPlcDriver):
         self._require_connection()
         if not self.read_data_ready():
             return None
+        sequence_before = self.read_result_sequence()
+        if int(sequence_before["value"]) <= 0:
+            raise FinsProtocolError(
+                "跑合PLC数据已就绪，但D"
+                f"{self.result_sequence_address}～D"
+                f"{self.result_sequence_address + 1}流水号无效："
+                f"{sequence_before['value']}"
+            )
         tray_id = self.read_tray_id()
         if not tray_id:
             raise FinsProtocolError("跑合 PLC 数据已就绪，但 DM3008 托盘号为空")
         words = self.read_words(self.result_base_address, self.result_word_count)
+        sequence_after = self.read_result_sequence()
+        if sequence_after["value"] != sequence_before["value"]:
+            raise FinsProtocolError(
+                "读取跑合结果期间PLC流水号发生变化："
+                f"{sequence_before['value']} -> {sequence_after['value']}"
+            )
         if not self.read_data_ready():
             raise FinsProtocolError("读取跑合结果期间数据就绪位被清除")
 
@@ -108,6 +160,7 @@ class RuninPlcDriver(FinsPlcDriver):
             words,
             data_ready=True,
             handshake_word=1 << self.data_ready_bit,
+            sequence=sequence_before,
         )
 
     def _parse_snapshot(
@@ -117,6 +170,7 @@ class RuninPlcDriver(FinsPlcDriver):
         *,
         data_ready: bool,
         handshake_word: int,
+        sequence: Dict[str, Any],
     ) -> Dict[str, Any]:
         """解析10个产品原始值；原PLC合格位仅保留作诊断。"""
 
@@ -165,6 +219,10 @@ class RuninPlcDriver(FinsPlcDriver):
             "read_complete_bit": self.read_complete_bit,
             "data_ready": bool(data_ready),
             "handshake_word": int(handshake_word) & 0xFFFF,
+            "result_sequence": int(sequence["value"]),
+            "result_sequence_words": list(sequence["words"]),
+            "result_sequence_address": int(sequence["address"]),
+            "result_sequence_word_order": str(sequence["word_order"]),
             "items": items,
         }
 
@@ -217,6 +275,7 @@ class RuninPlcDriver(FinsPlcDriver):
         tray_id: str,
         rows: Iterable[Iterable[int]],
         ready: bool = True,
+        sequence: int = 1,
     ) -> None:
         if not self.simulation:
             raise RuntimeError("仅仿真模式支持设置跑合结果")
@@ -230,4 +289,13 @@ class RuninPlcDriver(FinsPlcDriver):
             words.extend(int(value) for value in row)
         self.set_simulated_tray_id(tray_id)
         self.write_words(self.result_base_address, words)
+        sequence = int(sequence) & 0xFFFFFFFF
+        low_word = sequence & 0xFFFF
+        high_word = (sequence >> 16) & 0xFFFF
+        sequence_words = (
+            [low_word, high_word]
+            if self.result_sequence_word_order == "low_high"
+            else [high_word, low_word]
+        )
+        self.write_words(self.result_sequence_address, sequence_words)
         self.write_bit(self.handshake_address, self.data_ready_bit, ready)

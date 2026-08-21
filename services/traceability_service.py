@@ -1,5 +1,6 @@
 """托盘、产品及测试结果的本地追溯存储。"""
 
+import hashlib
 import json
 import sqlite3
 import uuid
@@ -12,12 +13,25 @@ class ProductMappingNotFoundError(LookupError):
     """PLC 托盘号和坑位号无法解析到产品 SN。"""
 
 
+class DuplicateRuninResultError(RuntimeError):
+    """同一托盘批次收到新的PLC结果事件，需要明确允许复测。"""
+
+
 def local_timestamp() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 class TraceabilityService:
     """使用 SQLite 保存产线本地数据，网络中断时仍可继续生产。"""
+
+    RUNIN_PAYLOAD_FIELDS = (
+        "tray_slot",
+        "runin_speed_rpm",
+        "runin_voltage_v",
+        "runin_temperature_c",
+        "runin_current_a",
+        "runin_error_code",
+    )
 
     def __init__(self, database_path: Path) -> None:
         self.database_path = Path(database_path)
@@ -71,6 +85,12 @@ class TraceabilityService:
                     tray_slot INTEGER NOT NULL CHECK(tray_slot BETWEEN 1 AND 10),
                     product_sn TEXT NOT NULL,
                     station_code TEXT NOT NULL,
+                    source_event_id TEXT,
+                    plc_sequence INTEGER,
+                    attempt_no INTEGER NOT NULL DEFAULT 1,
+                    is_retest INTEGER NOT NULL DEFAULT 0,
+                    retest_reason TEXT,
+                    retest_operator TEXT,
                     product_model TEXT,
                     quality_rule_version TEXT,
                     judgement_source TEXT,
@@ -85,7 +105,23 @@ class TraceabilityService:
                     runin_tested_at TEXT NOT NULL,
                     upload_status TEXT NOT NULL DEFAULT 'pending',
                     server_received_at TEXT,
-                    UNIQUE (tray_cycle_id, tray_slot),
+                    UNIQUE (tray_cycle_id, tray_slot, attempt_no),
+                    FOREIGN KEY (tray_cycle_id)
+                        REFERENCES tray_cycles(tray_cycle_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS runin_events (
+                    source_event_id TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL,
+                    plc_sequence INTEGER NOT NULL,
+                    tray_cycle_id TEXT NOT NULL,
+                    tray_id TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    attempt_no INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'processed',
+                    received_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    UNIQUE (device_id, plc_sequence),
                     FOREIGN KEY (tray_cycle_id)
                         REFERENCES tray_cycles(tray_cycle_id)
                 );
@@ -119,6 +155,17 @@ class TraceabilityService:
             ):
                 self._ensure_column(
                     connection, "runin_results", column_name, "TEXT"
+                )
+            for column_name, column_type in (
+                ("source_event_id", "TEXT"),
+                ("plc_sequence", "INTEGER"),
+                ("attempt_no", "INTEGER NOT NULL DEFAULT 1"),
+                ("is_retest", "INTEGER NOT NULL DEFAULT 0"),
+                ("retest_reason", "TEXT"),
+                ("retest_operator", "TEXT"),
+            ):
+                self._ensure_column(
+                    connection, "runin_results", column_name, column_type
                 )
             self._ensure_runin_results_column_order(connection)
 
@@ -154,6 +201,12 @@ class TraceabilityService:
             "tray_slot",
             "product_sn",
             "station_code",
+            "source_event_id",
+            "plc_sequence",
+            "attempt_no",
+            "is_retest",
+            "retest_reason",
+            "retest_operator",
             "product_model",
             "quality_rule_version",
             "judgement_source",
@@ -175,7 +228,17 @@ class TraceabilityService:
                 "PRAGMA table_info(runin_results)"
             ).fetchall()
         ]
-        if existing_columns == desired_columns:
+        schema_row = connection.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'runin_results'"
+        ).fetchone()
+        normalized_schema = "".join(
+            str(schema_row["sql"] if schema_row else "").lower().split()
+        )
+        has_attempt_unique = (
+            "unique(tray_cycle_id,tray_slot,attempt_no)" in normalized_schema
+        )
+        if existing_columns == desired_columns and has_attempt_unique:
             return
         if not set(desired_columns).issubset(existing_columns):
             return
@@ -190,6 +253,12 @@ class TraceabilityService:
                 tray_slot INTEGER NOT NULL CHECK(tray_slot BETWEEN 1 AND 10),
                 product_sn TEXT NOT NULL,
                 station_code TEXT NOT NULL,
+                source_event_id TEXT,
+                plc_sequence INTEGER,
+                attempt_no INTEGER NOT NULL DEFAULT 1,
+                is_retest INTEGER NOT NULL DEFAULT 0,
+                retest_reason TEXT,
+                retest_operator TEXT,
                 product_model TEXT,
                 quality_rule_version TEXT,
                 judgement_source TEXT,
@@ -204,7 +273,7 @@ class TraceabilityService:
                 runin_tested_at TEXT NOT NULL,
                 upload_status TEXT NOT NULL DEFAULT 'pending',
                 server_received_at TEXT,
-                UNIQUE (tray_cycle_id, tray_slot),
+                UNIQUE (tray_cycle_id, tray_slot, attempt_no),
                 FOREIGN KEY (tray_cycle_id)
                     REFERENCES tray_cycles(tray_cycle_id)
                     ON DELETE CASCADE
@@ -397,14 +466,28 @@ class TraceabilityService:
         server_received_at: Optional[str] = None,
     ) -> None:
         with self._connect() as connection:
+            outbox = connection.execute(
+                "SELECT entity_type, entity_id FROM upload_outbox WHERE outbox_id = ?",
+                (str(outbox_id),),
+            ).fetchone()
+            uploaded_at = server_received_at or local_timestamp()
             connection.execute(
                 """
                 UPDATE upload_outbox
                 SET status = 'uploaded', uploaded_at = ?, last_error = NULL
                 WHERE outbox_id = ?
                 """,
-                (server_received_at or local_timestamp(), str(outbox_id)),
+                (uploaded_at, str(outbox_id)),
             )
+            if outbox is not None and outbox["entity_type"] == "runin_result":
+                connection.execute(
+                    """
+                    UPDATE runin_results
+                    SET upload_status = 'uploaded', server_received_at = ?
+                    WHERE record_id = ?
+                    """,
+                    (uploaded_at, str(outbox["entity_id"])),
+                )
 
     def mark_upload_failed(self, outbox_id: str, message: str) -> None:
         with self._connect() as connection:
@@ -452,10 +535,103 @@ class TraceabilityService:
             station_code,
             measurements,
             tested_at or local_timestamp(),
+            source_event_id=f"manual:{uuid.uuid4()}",
+            plc_sequence=None,
+            attempt_no=1,
         )
         with self._connect() as connection:
             self._upsert_runin_record(connection, record)
         return record
+
+    @classmethod
+    def runin_payload_hash(
+        cls, tray_id: str, measurements: Sequence[Dict[str, Any]]
+    ) -> str:
+        """对PLC本次稳定结果生成摘要，用于发现流水号被错误复用。"""
+        normalized = {
+            "tray_id": str(tray_id or "").strip(),
+            "items": [
+                {
+                    field: item.get(field)
+                    for field in cls.RUNIN_PAYLOAD_FIELDS
+                }
+                for item in sorted(
+                    (dict(value) for value in measurements),
+                    key=lambda value: int(value.get("tray_slot", 0)),
+                )
+            ],
+        }
+        payload = json.dumps(
+            normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def inspect_runin_event(
+        self,
+        tray_id: str,
+        station_code: str,
+        plc_sequence: int,
+        measurements: Sequence[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """将PLC事件分为首次、同事件重发或需要授权的复测。"""
+        tray_id = str(tray_id or "").strip()
+        station_code = str(station_code or "").strip()
+        plc_sequence = int(plc_sequence)
+        if not tray_id:
+            raise ValueError("跑合结果托盘号不能为空")
+        if not station_code:
+            raise ValueError("跑合设备编号不能为空")
+        if plc_sequence <= 0:
+            raise ValueError("PLC结果流水号必须大于0")
+        payload_hash = self.runin_payload_hash(tray_id, measurements)
+        source_event_id = f"{station_code}:{plc_sequence}"
+
+        with self._connect() as connection:
+            products = self._active_tray_products(connection, tray_id)
+            tray_cycle_id = str(products[0]["tray_cycle_id"])
+            event = connection.execute(
+                "SELECT * FROM runin_events WHERE source_event_id = ?",
+                (source_event_id,),
+            ).fetchone()
+            if event is not None:
+                self._validate_existing_event(
+                    event, tray_cycle_id, tray_id, payload_hash
+                )
+                records = self._records_for_event(
+                    connection, source_event_id
+                )
+                if len(records) != 10:
+                    raise RuntimeError(
+                        f"流水号 {source_event_id} 已登记但结果不完整，"
+                        "请检查本地数据库"
+                    )
+                return {
+                    "status": "replay",
+                    "source_event_id": source_event_id,
+                    "tray_cycle_id": tray_cycle_id,
+                    "attempt_no": int(event["attempt_no"]),
+                    "payload_hash": payload_hash,
+                    "records": records,
+                }
+
+            previous_attempt = int(
+                connection.execute(
+                    """
+                    SELECT COALESCE(MAX(attempt_no), 0)
+                    FROM runin_results
+                    WHERE tray_cycle_id = ?
+                    """,
+                    (tray_cycle_id,),
+                ).fetchone()[0]
+            )
+        return {
+            "status": "retest_required" if previous_attempt else "new",
+            "source_event_id": source_event_id,
+            "tray_cycle_id": tray_cycle_id,
+            "attempt_no": previous_attempt + 1,
+            "payload_hash": payload_hash,
+            "records": [],
+        }
 
     def save_runin_tray_results(
         self,
@@ -463,6 +639,11 @@ class TraceabilityService:
         station_code: str,
         measurements: Sequence[Dict[str, Any]],
         tested_at: Optional[str] = None,
+        *,
+        plc_sequence: Optional[int] = None,
+        allow_retest: bool = False,
+        retest_reason: str = "",
+        retest_operator: str = "",
     ) -> List[Dict[str, Any]]:
         """在一个事务内保存当前卸载托盘的10条跑合结果。"""
         tray_id = str(tray_id or "").strip()
@@ -483,22 +664,69 @@ class TraceabilityService:
                 "以下坑位缺少上位机合格判定：" + "、".join(unjudged_slots)
             )
         tested_at = tested_at or local_timestamp()
+        station_code = str(station_code or "").strip()
+        payload_hash = self.runin_payload_hash(tray_id, items)
 
         with self._connect() as connection:
-            products = connection.execute(
-                """
-                SELECT p.tray_cycle_id, p.tray_id, p.tray_slot, p.product_sn,
-                       p.scanned_at
-                FROM tray_products AS p
-                JOIN tray_cycles AS c ON c.tray_cycle_id = p.tray_cycle_id
-                WHERE p.tray_id = ? AND c.status = 'active'
-                ORDER BY p.tray_slot
-                """,
-                (tray_id,),
-            ).fetchall()
-            if len(products) != 10:
-                raise ProductMappingNotFoundError(
-                    f"找不到托盘 {tray_id} 完整的 10 个坑位与产品 SN 映射"
+            products = self._active_tray_products(connection, tray_id)
+            tray_cycle_id = str(products[0]["tray_cycle_id"])
+            if plc_sequence is None:
+                source_event_id = f"manual:{uuid.uuid4()}"
+            else:
+                plc_sequence = int(plc_sequence)
+                if plc_sequence <= 0:
+                    raise ValueError("PLC结果流水号必须大于0")
+                source_event_id = f"{station_code}:{plc_sequence}"
+                existing_event = connection.execute(
+                    "SELECT * FROM runin_events WHERE source_event_id = ?",
+                    (source_event_id,),
+                ).fetchone()
+                if existing_event is not None:
+                    self._validate_existing_event(
+                        existing_event,
+                        tray_cycle_id,
+                        tray_id,
+                        payload_hash,
+                    )
+                    existing_records = self._records_for_event(
+                        connection, source_event_id
+                    )
+                    if len(existing_records) != 10:
+                        raise RuntimeError(
+                            f"流水号 {source_event_id} 的历史结果不完整"
+                        )
+                    return existing_records
+
+            previous_attempt = int(
+                connection.execute(
+                    """
+                    SELECT COALESCE(MAX(attempt_no), 0)
+                    FROM runin_results
+                    WHERE tray_cycle_id = ?
+                    """,
+                    (tray_cycle_id,),
+                ).fetchone()[0]
+            )
+            if previous_attempt and not allow_retest:
+                raise DuplicateRuninResultError(
+                    f"托盘 {tray_id} 当前批次已有跑合结果，"
+                    f"流水号 {source_event_id} 必须明确允许复测"
+                )
+            attempt_no = previous_attempt + 1
+            if plc_sequence is not None:
+                connection.execute(
+                    """
+                    INSERT INTO runin_events(
+                        source_event_id, device_id, plc_sequence,
+                        tray_cycle_id, tray_id, payload_hash, attempt_no,
+                        status, received_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'processed', ?, ?)
+                    """,
+                    (
+                        source_event_id, station_code, plc_sequence,
+                        tray_cycle_id, tray_id, payload_hash, attempt_no,
+                        tested_at, tested_at,
+                    ),
                 )
             measurements_by_slot = {
                 int(item["tray_slot"]): item for item in items
@@ -509,6 +737,12 @@ class TraceabilityService:
                     station_code,
                     measurements_by_slot[int(product["tray_slot"])],
                     tested_at,
+                    source_event_id=source_event_id,
+                    plc_sequence=plc_sequence,
+                    attempt_no=attempt_no,
+                    is_retest=attempt_no > 1,
+                    retest_reason=retest_reason,
+                    retest_operator=retest_operator,
                 )
                 for product in products
             ]
@@ -522,11 +756,19 @@ class TraceabilityService:
         station_code: str,
         measurements: Dict[str, Any],
         tested_at: str,
+        *,
+        source_event_id: Optional[str] = None,
+        plc_sequence: Optional[int] = None,
+        attempt_no: int = 1,
+        is_retest: bool = False,
+        retest_reason: str = "",
+        retest_operator: str = "",
     ) -> Dict[str, Any]:
+        event_key = source_event_id or f"legacy:{product['tray_cycle_id']}"
         record_id = str(
             uuid.uuid5(
                 uuid.NAMESPACE_URL,
-                f"runin:{product['tray_cycle_id']}:{product['tray_slot']}",
+                f"runin:{event_key}:{product['tray_slot']}",
             )
         )
         return {
@@ -536,6 +778,12 @@ class TraceabilityService:
             "tray_slot": product["tray_slot"],
             "product_sn": product["product_sn"],
             "station_code": str(station_code),
+            "source_event_id": source_event_id,
+            "plc_sequence": plc_sequence,
+            "attempt_no": int(attempt_no),
+            "is_retest": bool(is_retest),
+            "retest_reason": str(retest_reason or ""),
+            "retest_operator": str(retest_operator or ""),
             "product_model": measurements.get("product_model"),
             "quality_rule_version": measurements.get("quality_rule_version"),
             "judgement_source": measurements.get("judgement_source"),
@@ -553,6 +801,71 @@ class TraceabilityService:
         }
 
     @staticmethod
+    def _active_tray_products(
+        connection: sqlite3.Connection, tray_id: str
+    ) -> List[sqlite3.Row]:
+        products = connection.execute(
+            """
+            SELECT p.tray_cycle_id, p.tray_id, p.tray_slot, p.product_sn,
+                   p.scanned_at
+            FROM tray_products AS p
+            JOIN tray_cycles AS c ON c.tray_cycle_id = p.tray_cycle_id
+            WHERE p.tray_id = ? AND c.status = 'active'
+            ORDER BY p.tray_slot
+            """,
+            (tray_id,),
+        ).fetchall()
+        if len(products) != 10:
+            raise ProductMappingNotFoundError(
+                f"找不到托盘 {tray_id} 完整的 10 个坑位与产品 SN 映射"
+            )
+        return products
+
+    @staticmethod
+    def _validate_existing_event(
+        event: sqlite3.Row,
+        tray_cycle_id: str,
+        tray_id: str,
+        payload_hash: str,
+    ) -> None:
+        if (
+            str(event["tray_cycle_id"]) != str(tray_cycle_id)
+            or str(event["tray_id"]) != str(tray_id)
+        ):
+            raise RuntimeError(
+                f"PLC流水号 {event['source_event_id']} 已用于另一托盘批次；"
+                "可能是PLC流水号清零或被重复使用"
+            )
+        if str(event["payload_hash"]) != str(payload_hash):
+            raise RuntimeError(
+                f"PLC流水号 {event['source_event_id']} 对应的数据内容发生变化；"
+                "PLC在同一流水号下覆盖了结果区"
+            )
+
+    @staticmethod
+    def _records_for_event(
+        connection: sqlite3.Connection, source_event_id: str
+    ) -> List[Dict[str, Any]]:
+        rows = connection.execute(
+            """
+            SELECT * FROM runin_results
+            WHERE source_event_id = ?
+            ORDER BY tray_slot
+            """,
+            (source_event_id,),
+        ).fetchall()
+        records = []
+        for row in rows:
+            record = dict(row)
+            record["runin_passed"] = bool(record["runin_passed"])
+            record["is_retest"] = bool(record["is_retest"])
+            record["quality_failures"] = json.loads(
+                record.pop("quality_failures_json") or "[]"
+            )
+            records.append(record)
+        return records
+
+    @staticmethod
     def _upsert_runin_record(
         connection: sqlite3.Connection, record: Dict[str, Any]
     ) -> None:
@@ -560,15 +873,23 @@ class TraceabilityService:
             """
             INSERT INTO runin_results(
                 record_id, tray_cycle_id, tray_id, tray_slot, product_sn,
-                station_code, product_model, quality_rule_version,
-                judgement_source, runin_speed_rpm, runin_voltage_v,
+                station_code, source_event_id, plc_sequence, attempt_no,
+                is_retest, retest_reason, retest_operator, product_model,
+                quality_rule_version, judgement_source, runin_speed_rpm,
+                runin_voltage_v,
                 runin_temperature_c, runin_current_a, runin_error_code,
                 runin_passed, runin_result_code, quality_failures_json,
                 runin_tested_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(tray_cycle_id, tray_slot) DO UPDATE SET
-                record_id = excluded.record_id,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(record_id) DO UPDATE SET
                 station_code = excluded.station_code,
+                source_event_id = excluded.source_event_id,
+                plc_sequence = excluded.plc_sequence,
+                attempt_no = excluded.attempt_no,
+                is_retest = excluded.is_retest,
+                retest_reason = excluded.retest_reason,
+                retest_operator = excluded.retest_operator,
                 product_model = excluded.product_model,
                 quality_rule_version = excluded.quality_rule_version,
                 judgement_source = excluded.judgement_source,
@@ -588,6 +909,9 @@ class TraceabilityService:
                 record["record_id"], record["tray_cycle_id"],
                 record["tray_id"], record["tray_slot"],
                 record["product_sn"], record["station_code"],
+                record["source_event_id"], record["plc_sequence"],
+                record["attempt_no"], int(bool(record["is_retest"])),
+                record["retest_reason"], record["retest_operator"],
                 record["product_model"], record["quality_rule_version"],
                 record["judgement_source"],
                 record["runin_speed_rpm"], record["runin_voltage_v"],

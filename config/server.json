@@ -1,10 +1,14 @@
 {
   "enabled": false,
   "base_url": "",
+  "api_token": "",
   "upload_path": "/api/test-records",
+  "heartbeat_path": "/api/stations/heartbeat",
   "timeout_seconds": 10,
   "retry_count": 3,
   "retry_interval_seconds": 5,
+  "sync_interval_seconds": 10,
+  "batch_size": 100,
   "traceability": {
     "database_path": "data/traceability.db",
     "station_code": "RUNIN_01",

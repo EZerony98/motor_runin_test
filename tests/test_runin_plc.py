@@ -90,6 +90,33 @@ class RuninPlcDriverTests(unittest.TestCase):
         self.assertEqual(snapshot["result_base_address"], 1001)
         self.assertEqual(snapshot["result_end_address"], 1060)
         self.assertEqual(snapshot["handshake_address"], 3502)
+        self.assertEqual(snapshot["result_sequence"], 1)
+        self.assertEqual(snapshot["result_sequence_words"], [1, 0])
+        self.assertEqual(snapshot["result_sequence_address"], 3072)
+
+    def test_reads_high_low_sequence_word_order_when_configured(self) -> None:
+        config = runin_simulation_config()
+        config["mapping"]["result_sequence_word_order"] = "high_low"
+        driver = RuninPlcDriver(config)
+        driver.connect()
+        try:
+            driver.set_simulated_result(
+                "7001", sample_rows(), sequence=0x12345678
+            )
+            snapshot = driver.read_result_snapshot()
+        finally:
+            driver.disconnect()
+
+        self.assertEqual(snapshot["result_sequence"], 0x12345678)
+        self.assertEqual(snapshot["result_sequence_words"], [0x1234, 0x5678])
+
+    def test_ready_result_rejects_zero_sequence(self) -> None:
+        self.driver.set_simulated_result(
+            "7001", sample_rows(), ready=True, sequence=0
+        )
+
+        with self.assertRaisesRegex(Exception, "流水号无效"):
+            self.driver.read_result_snapshot()
 
     def test_live_snapshot_reads_values_without_data_ready_handshake(self) -> None:
         self.driver.set_simulated_result("7001", sample_rows(), ready=False)

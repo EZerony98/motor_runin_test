@@ -39,6 +39,7 @@ class RuninPlcWorker(QObject):
         self.last_ready_state: Optional[bool] = None
         self.last_error_message = ""
         self.last_error_log_at = 0.0
+        self.pending_sequence: Optional[int] = None
 
     @Slot()
     def start(self) -> None:
@@ -61,6 +62,7 @@ class RuninPlcWorker(QObject):
             live_snapshot = self.driver.read_live_snapshot()
             signature = (
                 live_snapshot.get("tray_id"),
+                live_snapshot.get("result_sequence"),
                 live_snapshot.get("data_ready"),
                 tuple(
                     tuple(
@@ -94,6 +96,7 @@ class RuninPlcWorker(QObject):
                     self.idle_ack_cleared = True
                 self.processing_pending = False
                 self.ack_sent = False
+                self.pending_sequence = None
                 self.retry_not_before = 0.0
                 return
             self.idle_ack_cleared = False
@@ -106,6 +109,7 @@ class RuninPlcWorker(QObject):
             snapshot = self.driver.read_result_snapshot()
             if snapshot is not None:
                 self.processing_pending = True
+                self.pending_sequence = int(snapshot["result_sequence"])
                 self.result_ready.emit(self.device_id, snapshot)
         except Exception as error:
             self.driver.disconnect()
@@ -130,6 +134,14 @@ class RuninPlcWorker(QObject):
         try:
             if not self.driver.is_connected:
                 self.driver.connect()
+            current_sequence = int(
+                self.driver.read_result_sequence()["value"]
+            )
+            if current_sequence != self.pending_sequence:
+                raise RuntimeError(
+                    "写入完成确认前PLC流水号已变化："
+                    f"期望{self.pending_sequence}，实际{current_sequence}"
+                )
             self.driver.write_read_complete(True)
             self.processing_pending = False
             self.ack_sent = True
@@ -152,9 +164,26 @@ class RuninPlcWorker(QObject):
                 self.driver.connect()
             if not self.driver.read_data_ready():
                 raise RuntimeError("写入上位机判定前PLC数据就绪位已清除")
+            expected_sequence = int(snapshot.get("result_sequence", -1))
+            current_sequence = int(
+                self.driver.read_result_sequence()["value"]
+            )
+            if current_sequence != expected_sequence:
+                raise RuntimeError(
+                    "写入上位机判定前PLC流水号不一致："
+                    f"期望{expected_sequence}，实际{current_sequence}"
+                )
             self.driver.write_pass_results(snapshot.get("items", []))
             if not self.driver.read_data_ready():
                 raise RuntimeError("写入上位机判定期间PLC数据就绪位被清除")
+            verified_sequence = int(
+                self.driver.read_result_sequence()["value"]
+            )
+            if verified_sequence != expected_sequence:
+                raise RuntimeError(
+                    "写入上位机判定期间PLC流水号发生变化："
+                    f"期望{expected_sequence}，实际{verified_sequence}"
+                )
             self.log.emit(
                 f"{self.device_name} 上位机判定结果已写入10个合格标志地址"
             )
