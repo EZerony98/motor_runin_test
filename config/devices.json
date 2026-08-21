@@ -52,7 +52,7 @@
         "read_complete_bit": 1,
         "result_sequence_address": 3072,
         "result_sequence_words": 2,
-        "result_sequence_word_order": "low_high"
+        "result_sequence_word_order": "high_low"
       }
     },
     {
@@ -82,7 +82,7 @@
         "read_complete_bit": 1,
         "result_sequence_address": 3072,
         "result_sequence_words": 2,
-        "result_sequence_word_order": "low_high"
+        "result_sequence_word_order": "high_low"
       }
     },
     {
@@ -112,7 +112,7 @@
         "read_complete_bit": 1,
         "result_sequence_address": 3072,
         "result_sequence_words": 2,
-        "result_sequence_word_order": "low_high"
+        "result_sequence_word_order": "high_low"
       }
     },
     {
@@ -142,7 +142,7 @@
         "read_complete_bit": 1,
         "result_sequence_address": 3072,
         "result_sequence_words": 2,
-        "result_sequence_word_order": "low_high"
+        "result_sequence_word_order": "high_low"
       }
     }
   ],
